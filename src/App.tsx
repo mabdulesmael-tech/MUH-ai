@@ -42,7 +42,8 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 }
 
 // Initialize Gemini API
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+const genAI = new GoogleGenAI({ apiKey });
 
 interface Message {
   id: string;
@@ -193,6 +194,17 @@ function App() {
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
 
+    // Check if API key is configured
+    if (!import.meta.env.VITE_GEMINI_API_KEY) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "⚠️ **Configuração Necessária:** A chave de API (`VITE_GEMINI_API_KEY`) não foi encontrada. No Cloudflare Pages, adicione-a em 'Environment variables' nas configurações de build.",
+        timestamp: new Date(),
+      }]);
+      return;
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -238,12 +250,22 @@ function App() {
         ));
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error calling Gemini API:", error);
+      let errorMessage = "Desculpe, ocorreu um erro ao processar sua solicitação. Por favor, tente novamente.";
+      
+      if (error?.message?.includes("API key not valid")) {
+        errorMessage = "⚠️ **Chave de API Inválida:** A chave de API configurada não é válida. Verifique as configurações no painel do Vercel.";
+      } else if (error?.message?.includes("Quota exceeded")) {
+        errorMessage = "⚠️ **Limite Atingido:** O limite de uso da API foi excedido. Tente novamente mais tarde.";
+      } else if (error?.message?.includes("Model not found")) {
+        errorMessage = "⚠️ **Modelo não encontrado:** O modelo selecionado não está disponível ou o nome está incorreto.";
+      }
+
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'assistant',
-        content: "Desculpe, ocorreu um erro ao processar sua solicitação. Por favor, tente novamente.",
+        content: errorMessage,
         timestamp: new Date(),
       }]);
     } finally {
