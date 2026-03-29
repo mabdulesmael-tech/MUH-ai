@@ -17,7 +17,8 @@
 }
 
 .markdown-body {
-  @apply text-[15px] leading-relaxed text-gray-300;
+  @apply text-[15px] leading-relaxed text-gray-300 break-words;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body p {

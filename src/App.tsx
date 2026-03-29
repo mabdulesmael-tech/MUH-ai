@@ -74,7 +74,7 @@ const MessageItem = memo(({ message }: { message: Message }) => (
     }`}>
       {message.role === 'assistant' ? <Bot className="w-5 h-5" /> : <User className="w-4 h-4" />}
     </div>
-    <div className={`flex flex-col max-w-[85%] ${message.role === 'assistant' ? '' : 'items-end'}`}>
+    <div className={`flex flex-col ${message.role === 'assistant' ? 'max-w-[92%]' : 'max-w-[85%] items-end'}`}>
       <div className={`w-full ${message.role === 'assistant' ? '' : 'bg-white/5 p-4 rounded-2xl border border-brand-border'}`}>
         {message.attachedImageUrl && (
           <div className="mb-3 rounded-lg overflow-hidden border border-white/10 max-w-sm">
@@ -597,7 +597,7 @@ function App() {
       // Prepare history from the current state of the session
       // We use the functional update pattern or a ref to get the most recent state if needed,
       // but here we can just use the current session messages.
-      const history = messages.map(m => ({
+      const history = messages.slice(-10).map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
       }));
@@ -614,13 +614,14 @@ function App() {
           { role: 'user', parts: currentParts }
         ],
         config: {
-          systemInstruction: `Você é a MUH ai, uma IA rápida e eficiente. O nome do usuário é ${userName || 'Utilizador'}. Trate-o de forma amigável e personalizada. Responda em português brasileiro de forma direta. Use markdown.`,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+          systemInstruction: `Você é a MUH ai, uma IA rápida e eficiente. O nome do usuário é ${userName || 'Utilizador'}. Trate-o de forma amigável e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
+          maxOutputTokens: 4096,
         }
       });
 
       for await (const chunk of response) {
-        const chunkText = chunk.text;
+        const chunkText = chunk.text || "";
+        if (!chunkText) continue;
         assistantContent += chunkText;
         
         setSessions(prev => prev.map(s => 
@@ -898,7 +899,7 @@ function App() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-12 pb-60">
+              <div className="space-y-12 pb-80">
                 <AnimatePresence initial={false}>
                   {messages.map((message) => (
                     <MessageItem key={message.id} message={message} />
