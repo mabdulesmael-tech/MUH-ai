@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense } from 'react';
+import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense, useCallback } from 'react';
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2 } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2, Menu, X, MessageSquare, History } from 'lucide-react';
 
 // Lazy load ReactMarkdown to reduce initial bundle size
 const ReactMarkdown = lazy(() => import('react-markdown'));
@@ -55,12 +55,19 @@ interface Message {
   timestamp: Date;
 }
 
+interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  updatedAt: Date;
+}
+
 // Memoized Message Item for performance
 const MessageItem = memo(({ message }: { message: Message }) => (
   <motion.div
     initial={{ opacity: 0, y: 10 }}
     animate={{ opacity: 1, y: 0 }}
-    className={`flex gap-6 ${message.role === 'assistant' ? '' : 'flex-row-reverse'}`}
+    className={`flex gap-6 ${message.role === 'assistant' ? '' : 'flex-row-reverse'} message-item`}
   >
     <div className={`w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center mt-1 ${
       message.role === 'assistant' ? 'bg-brand-accent/10 text-brand-accent border border-brand-accent/20' : 'bg-white/10 text-white border border-white/10'
@@ -365,12 +372,68 @@ export default function AppWrapper() {
 }
 
 function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
+  const [isNameModalOpen, setIsNameModalOpen] = useState(false);
+  const [tempName, setTempName] = useState('');
   const [input, setInput] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [greeting, setGreeting] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Load sessions and username from localStorage on mount
+  useEffect(() => {
+    const savedName = localStorage.getItem('muh_ai_username');
+    if (savedName) {
+      setUserName(savedName);
+    } else {
+      setIsNameModalOpen(true);
+    }
+
+    const savedSessions = localStorage.getItem('muh_ai_sessions');
+    if (savedSessions) {
+      try {
+        const parsed = JSON.parse(savedSessions);
+        // Convert string dates back to Date objects
+        const formatted = parsed.map((s: any) => ({
+          ...s,
+          updatedAt: new Date(s.updatedAt),
+          messages: s.messages.map((m: any) => ({
+            ...m,
+            timestamp: new Date(m.timestamp)
+          }))
+        }));
+        setSessions(formatted);
+        if (formatted.length > 0) {
+          setActiveSessionId(formatted[0].id);
+        }
+      } catch (e) {
+        console.error("Error parsing saved sessions", e);
+      }
+    }
+  }, []);
+
+  // Save sessions to localStorage whenever they change
+  useEffect(() => {
+    if (sessions.length > 0) {
+      localStorage.setItem('muh_ai_sessions', JSON.stringify(sessions));
+    }
+  }, [sessions]);
+
+  const saveUserName = useCallback(() => {
+    if (tempName.trim()) {
+      setUserName(tempName.trim());
+      localStorage.setItem('muh_ai_username', tempName.trim());
+      setIsNameModalOpen(false);
+    }
+  }, [tempName]);
+
+  const activeSession = sessions.find(s => s.id === activeSessionId);
+  const messages = activeSession?.messages || [];
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -380,16 +443,40 @@ function App() {
     else setGreeting('Boa madrugada');
   }, []);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  };
+  }, []);
 
   useEffect(() => {
     const timeout = setTimeout(scrollToBottom, 100);
     return () => clearTimeout(timeout);
-  }, [messages]);
+  }, [messages, scrollToBottom]);
+
+  const createNewSession = useCallback(() => {
+    const newSession: ChatSession = {
+      id: Date.now().toString(),
+      title: 'Nova conversa',
+      messages: [],
+      updatedAt: new Date(),
+    };
+    setSessions(prev => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+    setIsSidebarOpen(false);
+  }, []);
+
+  const deleteSession = useCallback((id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSessions(prev => {
+      const newSessions = prev.filter(s => s.id !== id);
+      if (newSessions.length === 0) {
+        localStorage.removeItem('muh_ai_sessions');
+      }
+      return newSessions;
+    });
+    setActiveSessionId(prev => prev === id ? (sessions.length > 1 ? sessions.find(s => s.id !== id)?.id || null : null) : prev);
+  }, [sessions]);
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -403,17 +490,34 @@ function App() {
     });
   };
 
-  const handleSend = async () => {
+  const handleSend = useCallback(async () => {
     if ((!input.trim() && !selectedFile) || isLoading) return;
+
+    // Ensure we have an active session
+    let currentSessionId = activeSessionId;
+    if (!currentSessionId) {
+      const newSession: ChatSession = {
+        id: Date.now().toString(),
+        title: input.trim().substring(0, 30) || 'Nova conversa',
+        messages: [],
+        updatedAt: new Date(),
+      };
+      setSessions(prev => [newSession, ...prev]);
+      setActiveSessionId(newSession.id);
+      currentSessionId = newSession.id;
+    }
 
     // Check if API key is configured
     if (!import.meta.env.VITE_GEMINI_API_KEY) {
-      setMessages(prev => [...prev, {
+      const errorMsg: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: "⚠️ **Configuração Necessária:** A chave de API (`VITE_GEMINI_API_KEY`) não foi encontrada. No Cloudflare Pages, adicione-a em 'Environment variables' nas configurações de build.",
         timestamp: new Date(),
-      }]);
+      };
+      setSessions(prev => prev.map(s => 
+        s.id === currentSessionId ? { ...s, messages: [...s.messages, errorMsg] } : s
+      ));
       return;
     }
 
@@ -451,9 +555,21 @@ function App() {
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    // Update session with user message and title if it's the first message
+    setSessions(prev => prev.map(s => {
+      if (s.id === currentSessionId) {
+        const isFirstMessage = s.messages.length === 0;
+        return {
+          ...s,
+          title: isFirstMessage ? (input.trim().substring(0, 40) || 'Conversa com anexo') : s.title,
+          messages: [...s.messages, userMessage],
+          updatedAt: new Date()
+        };
+      }
+      return s;
+    }));
+
     const currentInput = input.trim();
-    const currentFile = selectedFile;
     setInput('');
     setSelectedFile(null);
     
@@ -461,17 +577,23 @@ function App() {
 
     try {
       const assistantMessageId = (Date.now() + 1).toString();
-      
       let assistantContent = "";
 
-      setMessages(prev => [...prev, {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date(),
-      }]);
+      setSessions(prev => prev.map(s => 
+        s.id === currentSessionId ? { 
+          ...s, 
+          messages: [...s.messages, {
+            id: assistantMessageId,
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+          }] 
+        } : s
+      ));
 
-      // Prepare contents for multimodal call
+      // Prepare history from the current state of the session
+      // We use the functional update pattern or a ref to get the most recent state if needed,
+      // but here we can just use the current session messages.
       const history = messages.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
@@ -489,7 +611,7 @@ function App() {
           { role: 'user', parts: currentParts }
         ],
         config: {
-          systemInstruction: "Você é a MUH ai, uma IA rápida e eficiente. Responda em português brasileiro de forma direta e amigável. Use markdown.",
+          systemInstruction: `Você é a MUH ai, uma IA rápida e eficiente. O nome do usuário é ${userName || 'Utilizador'}. Trate-o de forma amigável e personalizada. Responda em português brasileiro de forma direta. Use markdown.`,
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         }
       });
@@ -498,8 +620,13 @@ function App() {
         const chunkText = chunk.text;
         assistantContent += chunkText;
         
-        setMessages(prev => prev.map(m => 
-          m.id === assistantMessageId ? { ...m, content: assistantContent } : m
+        setSessions(prev => prev.map(s => 
+          s.id === currentSessionId ? {
+            ...s,
+            messages: s.messages.map(m => 
+              m.id === assistantMessageId ? { ...m, content: assistantContent } : m
+            )
+          } : s
         ));
       }
 
@@ -515,120 +642,282 @@ function App() {
         errorMessage = "⚠️ **Modelo não encontrado:** O modelo selecionado não está disponível ou o nome está incorreto.";
       }
 
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: errorMessage,
-        timestamp: new Date(),
-      }]);
+      setSessions(prev => prev.map(s => 
+        s.id === currentSessionId ? {
+          ...s,
+          messages: [...s.messages, {
+            id: Date.now().toString(),
+            role: 'assistant',
+            content: errorMessage,
+            timestamp: new Date(),
+          }]
+        } : s
+      ));
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const clearChat = () => {
-    setMessages([]);
-  };
+  }, [input, selectedFile, isLoading, activeSessionId, sessions, messages, userName]);
 
   return (
-    <div className="flex flex-col h-screen bg-brand-dark text-gray-200">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 bg-brand-dark/80 backdrop-blur-md border-b border-brand-border sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={clearChat}
-            className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-500 hover:text-white"
-          >
-            <Plus className="w-5 h-5" />
-          </button>
-          <div className="flex items-center gap-2 px-2 py-1 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">
-            <span className="text-sm font-medium text-gray-200 tracking-tight">MUH ai</span>
-            <ChevronDown className="w-4 h-4 text-gray-600" />
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-brand-accent/10 rounded-full flex items-center justify-center border border-brand-accent/20 overflow-hidden">
-            <Bot className="w-4 h-4 text-brand-accent" />
-          </div>
-        </div>
-      </header>
+    <div className="flex h-screen bg-brand-dark text-gray-200 overflow-hidden">
+      {/* Sidebar Overlay */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
+          />
+        )}
+      </AnimatePresence>
 
-      {/* Chat Area */}
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto w-full px-4 py-8">
-          {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-              <motion.h2 
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="text-4xl font-semibold text-white mb-12 tracking-tight"
-              >
-                {greeting}, como posso ajudar?
-              </motion.h2>
-              
-              <div className="w-full max-w-2xl">
-                <ChatInput 
-                  input={input}
-                  setInput={setInput}
-                  handleSend={handleSend}
-                  isLoading={isLoading}
-                  placeholder="Comece uma nova conversa..."
-                  selectedFile={selectedFile}
-                  setSelectedFile={setSelectedFile}
-                />
-                
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
-                  {[
-                    { icon: "📝", label: "Resumir texto" },
-                    { icon: "💻", label: "Explicar código" },
-                    { icon: "🎨", label: "Ideias criativas" },
-                    { icon: "📊", label: "Analisar dados" }
-                  ].map((item) => (
-                    <button
-                      key={item.label}
-                      onClick={() => setInput(item.label)}
-                      className="flex flex-col items-center gap-2 p-4 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 hover:border-brand-accent/30 transition-all group"
+      {/* Sidebar */}
+      <aside className={`fixed lg:static inset-y-0 left-0 bg-brand-surface border-r border-brand-border z-50 transform transition-all duration-300 ease-in-out will-change-transform ${
+        isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+      } ${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-72'} w-72`}>
+        <div className="flex flex-col h-full p-4 relative">
+          <div className={`flex items-center mb-6 ${isSidebarCollapsed ? 'lg:justify-center' : 'justify-between'}`}>
+            {/* Collapse Toggle Arrow at Top Left */}
+            <button 
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+              className="hidden lg:flex p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all"
+              title={isSidebarCollapsed ? "Expandir" : "Recolher"}
+            >
+              <ChevronDown className={`w-5 h-5 transition-transform duration-300 ${isSidebarCollapsed ? '-rotate-90' : 'rotate-90'}`} />
+            </button>
+            
+            {!isSidebarCollapsed && (
+              <span className="text-[10px] font-bold text-brand-accent uppercase tracking-[0.2em]">MUH AI</span>
+            )}
+          </div>
+
+          <button 
+            onClick={createNewSession}
+            className={`flex items-center gap-3 w-full p-3 rounded-xl border border-brand-border hover:bg-white/5 transition-all mb-6 group ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
+          >
+            <Plus className="w-5 h-5 text-brand-accent group-hover:scale-110 transition-transform flex-shrink-0" />
+            {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Nova conversa</span>}
+          </button>
+
+          <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar overflow-x-hidden">
+            <div className={`flex items-center gap-2 px-2 mb-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
+              <History className="w-4 h-4 text-gray-500 flex-shrink-0" />
+              {!isSidebarCollapsed && <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Histórico</span>}
+            </div>
+            {sessions.length === 0 ? (
+              !isSidebarCollapsed && <p className="text-xs text-gray-600 px-2 py-4 italic">Nenhuma conversa guardada.</p>
+            ) : (
+              sessions.map(session => (
+                <div 
+                  key={session.id}
+                  onClick={() => {
+                    setActiveSessionId(session.id);
+                    setIsSidebarOpen(false);
+                  }}
+                  title={session.title}
+                  className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${
+                    activeSessionId === session.id 
+                      ? 'bg-brand-accent/10 border border-brand-accent/20 text-white' 
+                      : 'hover:bg-white/5 border border-transparent text-gray-400 hover:text-gray-200'
+                  } ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
+                >
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <MessageSquare className={`w-4 h-4 flex-shrink-0 ${activeSessionId === session.id ? 'text-brand-accent' : 'text-gray-600'}`} />
+                    {!isSidebarCollapsed && <span className="text-sm truncate font-medium">{session.title}</span>}
+                  </div>
+                  {!isSidebarCollapsed && (
+                    <button 
+                      onClick={(e) => deleteSession(session.id, e)}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-all"
                     >
-                      <span className="text-xl group-hover:scale-110 transition-transform">{item.icon}</span>
-                      <span className="text-xs font-medium text-gray-500 group-hover:text-gray-300 transition-colors">{item.label}</span>
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
-                  ))}
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="pt-4 border-t border-brand-border mt-4">
+            <div className={`flex items-center gap-3 p-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
+              <div className="w-8 h-8 rounded-full bg-brand-accent/20 flex items-center justify-center flex-shrink-0">
+                <User className="w-4 h-4 text-brand-accent" />
+              </div>
+              {!isSidebarCollapsed && (
+                <>
+                  <div className="flex-1 overflow-hidden">
+                    <p className="text-xs font-medium truncate">{userName || 'Utilizador'}</p>
+                    <p className="text-[10px] text-gray-500">Plano Grátis</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsNameModalOpen(true)}
+                    className="p-1.5 hover:bg-white/5 rounded-lg text-gray-600 hover:text-white transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5 rotate-45" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Name Modal */}
+      <AnimatePresence>
+        {isNameModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl p-8 shadow-2xl"
+            >
+              <div className="flex flex-col items-center text-center mb-8">
+                <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
+                  <Bot className="w-8 h-8 text-brand-accent" />
+                </div>
+                <h3 className="text-2xl font-bold text-white mb-2 tracking-tight">Bem-vindo à MUH ai</h3>
+                <p className="text-gray-400 text-sm">Como é que eu te devo chamar?</p>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="neon-border-container">
+                  <input 
+                    type="text" 
+                    value={tempName}
+                    onChange={(e) => setTempName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && saveUserName()}
+                    placeholder="O teu nome..."
+                    className="w-full p-4 bg-brand-surface border-none focus:ring-0 text-white placeholder-gray-600 rounded-[15px] text-center text-lg"
+                    autoFocus
+                  />
+                </div>
+                <button 
+                  onClick={saveUserName}
+                  disabled={!tempName.trim()}
+                  className="w-full py-4 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(99,102,241,0.3)]"
+                >
+                  Confirmar Nome
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        {/* Header */}
+        <header className="flex items-center justify-between px-4 py-3 bg-brand-dark/80 backdrop-blur-md border-b border-brand-border sticky top-0 z-10">
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-500 hover:text-white lg:hidden"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2 px-2 py-1 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">
+              <span className="text-sm font-medium text-gray-200 tracking-tight">
+                {activeSession?.title || 'MUH ai'}
+              </span>
+              <ChevronDown className="w-4 h-4 text-gray-600" />
+            </div>
+          </div>
+          <div className="flex items-center gap-3 group cursor-default">
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] font-bold text-brand-accent uppercase tracking-[0.2em] leading-none">MUH AI</span>
+              <span className="text-[8px] text-gray-500 font-medium uppercase tracking-widest">Online</span>
+            </div>
+            <div className="w-10 h-10 bg-brand-accent/15 rounded-xl flex items-center justify-center border border-brand-accent/30 overflow-hidden logo-glow transition-transform group-hover:scale-105">
+              <Bot className="w-5 h-5 text-brand-accent" />
+            </div>
+          </div>
+        </header>
+
+        {/* Chat Area */}
+        <main className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="max-w-3xl mx-auto w-full px-4 py-8">
+            {messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+                <motion.h2 
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-4xl font-semibold text-white mb-12 tracking-tight"
+                >
+                  {greeting}, {userName?.split(' ')[0] || 'Utilizador'}!
+                </motion.h2>
+                
+                <div className="w-full max-w-2xl">
+                  <ChatInput 
+                    input={input}
+                    setInput={setInput}
+                    handleSend={handleSend}
+                    isLoading={isLoading}
+                    placeholder="Comece uma nova conversa..."
+                    selectedFile={selectedFile}
+                    setSelectedFile={setSelectedFile}
+                  />
+                  
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
+                    {[
+                      { icon: "📝", label: "Resumir texto" },
+                      { icon: "💻", label: "Explicar código" },
+                      { icon: "🎨", label: "Ideias criativas" },
+                      { icon: "📊", label: "Analisar dados" }
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={() => setInput(item.label)}
+                        className="flex flex-col items-center gap-2 p-4 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 hover:border-brand-accent/30 transition-all group"
+                      >
+                        <span className="text-xl group-hover:scale-110 transition-transform">{item.icon}</span>
+                        <span className="text-xs font-medium text-gray-500 group-hover:text-gray-300 transition-colors">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="space-y-12 pb-60">
-              <AnimatePresence initial={false}>
-                {messages.map((message) => (
-                  <MessageItem key={message.id} message={message} />
-                ))}
-              </AnimatePresence>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-      </main>
-
-      {/* Persistent Input Area (only when chatting) */}
-      {messages.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-brand-dark via-brand-dark to-transparent pt-12 pb-6 px-4">
-          <div className="max-w-3xl mx-auto">
-            <ChatInput 
-              input={input}
-              setInput={setInput}
-              handleSend={handleSend}
-              isLoading={isLoading}
-              placeholder="Responda à MUH ai..."
-              selectedFile={selectedFile}
-              setSelectedFile={setSelectedFile}
-              isSmall={true}
-            />
-            <p className="text-[10px] text-center text-gray-600 mt-3 font-medium">
-              MUH ai pode cometer erros. Considere verificar informações importantes.
-            </p>
+            ) : (
+              <div className="space-y-12 pb-60">
+                <AnimatePresence initial={false}>
+                  {messages.map((message) => (
+                    <MessageItem key={message.id} message={message} />
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
           </div>
-        </div>
-      )}
+        </main>
+
+        {/* Persistent Input Area (only when chatting) */}
+        {messages.length > 0 && (
+          <div className={`fixed bottom-0 left-0 right-0 ${isSidebarCollapsed ? 'lg:left-20' : 'lg:left-72'} bg-gradient-to-t from-brand-dark via-brand-dark to-transparent pt-12 pb-6 px-4 transition-all duration-300`}>
+            <div className="max-w-3xl mx-auto">
+              <ChatInput 
+                input={input}
+                setInput={setInput}
+                handleSend={handleSend}
+                isLoading={isLoading}
+                placeholder="Responda à MUH ai..."
+                selectedFile={selectedFile}
+                setSelectedFile={setSelectedFile}
+                isSmall={true}
+              />
+              <p className="text-[10px] text-center text-gray-600 mt-3 font-medium">
+                MUH ai pode cometer erros. Considere verificar informações importantes.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

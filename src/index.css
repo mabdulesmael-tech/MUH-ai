@@ -69,7 +69,7 @@
   background: linear-gradient(90deg, #6366f1, #a855f7, #6366f1);
   background-size: 200% 200%;
   animation: neon-flow 4s linear infinite;
-  box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.35);
 }
 
 .neon-border-container::before {
@@ -79,8 +79,8 @@
   background: linear-gradient(90deg, #6366f1, #a855f7, #6366f1);
   background-size: 200% 200%;
   animation: neon-flow 4s linear infinite;
-  filter: blur(8px);
-  opacity: 0.4;
+  filter: blur(10px);
+  opacity: 0.6;
   border-radius: 1.1rem;
   z-index: -1;
 }
@@ -105,4 +105,25 @@
 
 ::-webkit-scrollbar-thumb {
   @apply bg-white/5 rounded-full hover:bg-white/10 transition-colors;
+}
+
+/* Performance optimizations */
+.message-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 100px;
+}
+
+.gpu-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+@keyframes logo-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(99, 102, 241, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.6); }
+}
+
+.logo-glow {
+  animation: logo-glow 3s ease-in-out infinite;
 }
