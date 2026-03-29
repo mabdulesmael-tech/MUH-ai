@@ -350,7 +350,7 @@ const ChatInput = memo(({
             className={`p-2 rounded-xl transition-all ${
               (!input.trim() && !selectedFile) || isLoading || isRecording
                 ? 'text-gray-700 bg-white/5' 
-                : `text-white bg-brand-accent hover:bg-brand-accent/80 hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(99,102,241,0.3)]`
+                : `text-white bg-brand-accent hover:bg-brand-accent/80 hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(168, 85, 247, 0.4)]`
             }`}
           >
             {isLoading ? <Loader2 className={isSmall ? "w-4 h-4 animate-spin" : "w-5 h-5 animate-spin"} /> : <Send className={isSmall ? "w-4 h-4" : "w-5 h-5"} />}
@@ -429,6 +429,7 @@ function App() {
       setUserName(tempName.trim());
       localStorage.setItem('muh_ai_username', tempName.trim());
       setIsNameModalOpen(false);
+      window.location.reload();
     }
   }, [tempName]);
 
@@ -450,8 +451,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const timeout = setTimeout(scrollToBottom, 100);
-    return () => clearTimeout(timeout);
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.role === 'assistant') {
+      scrollToBottom();
+    }
   }, [messages, scrollToBottom]);
 
   const createNewSession = useCallback(() => {
@@ -689,7 +692,15 @@ function App() {
             </button>
             
             {!isSidebarCollapsed && (
-              <span className="text-[10px] font-bold text-brand-accent uppercase tracking-[0.2em]">MUH AI</span>
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-brand-accent/15 rounded-lg flex items-center justify-center border border-brand-accent/30">
+                  <Bot className="w-4 h-4 text-brand-accent" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH AI</span>
+                  <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Online</span>
+                </div>
+              </div>
             )}
           </div>
 
@@ -797,13 +808,12 @@ function App() {
                     onKeyDown={(e) => e.key === 'Enter' && saveUserName()}
                     placeholder="O teu nome..."
                     className="w-full p-4 bg-brand-surface border-none focus:ring-0 text-white placeholder-gray-600 rounded-[15px] text-center text-lg"
-                    autoFocus
                   />
                 </div>
                 <button 
                   onClick={saveUserName}
                   disabled={!tempName.trim()}
-                  className="w-full py-4 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(99,102,241,0.3)]"
+                  className="w-full py-4 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(168,85,247,0.4)]"
                 >
                   Confirmar Nome
                 </button>
@@ -816,27 +826,30 @@ function App() {
       <div className="flex-1 flex flex-col min-w-0 relative">
         {/* Header */}
         <header className="flex items-center justify-between px-4 py-3 bg-brand-dark/80 backdrop-blur-md border-b border-brand-border sticky top-0 z-10">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 group cursor-default">
             <button 
               onClick={() => setIsSidebarOpen(true)}
               className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-500 hover:text-white lg:hidden"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <div className="flex items-center gap-2 px-2 py-1 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">
-              <span className="text-sm font-medium text-gray-200 tracking-tight">
-                {activeSession?.title || 'MUH ai'}
-              </span>
-              <ChevronDown className="w-4 h-4 text-gray-600" />
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-brand-accent/15 rounded-xl flex items-center justify-center border border-brand-accent/30 overflow-hidden logo-glow transition-transform group-hover:scale-105">
+                <Bot className="w-5 h-5 text-brand-accent" />
+              </div>
+              <div className="flex flex-col items-start">
+                <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH AI</span>
+                <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Online</span>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-3 group cursor-default">
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] font-bold text-brand-accent uppercase tracking-[0.2em] leading-none">MUH AI</span>
-              <span className="text-[8px] text-gray-500 font-medium uppercase tracking-widest">Online</span>
-            </div>
-            <div className="w-10 h-10 bg-brand-accent/15 rounded-xl flex items-center justify-center border border-brand-accent/30 overflow-hidden logo-glow transition-transform group-hover:scale-105">
-              <Bot className="w-5 h-5 text-brand-accent" />
+          
+          <div className="flex items-center gap-3">
+            <div className="hidden md:flex items-center gap-2 px-2 py-1 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">
+              <span className="text-sm font-medium text-gray-400 tracking-tight">
+                {activeSession?.title || 'Conversa'}
+              </span>
+              <ChevronDown className="w-4 h-4 text-gray-600" />
             </div>
           </div>
         </header>
