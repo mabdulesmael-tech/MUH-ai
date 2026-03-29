@@ -85,9 +85,18 @@
   z-index: -1;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 5px;
+/* Custom audio player styling */
+.custom-audio::-webkit-media-controls-panel {
+  @apply bg-brand-surface border border-brand-border;
+}
+
+.custom-audio::-webkit-media-controls-current-time-display,
+.custom-audio::-webkit-media-controls-time-remaining-display {
+  @apply text-gray-400 text-xs;
+}
+
+.custom-audio::-webkit-media-controls-play-button {
+  @apply text-brand-accent;
 }
 
 ::-webkit-scrollbar-track {

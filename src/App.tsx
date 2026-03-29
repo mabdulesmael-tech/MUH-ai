@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2 } from 'lucide-react';
 
 // Lazy load ReactMarkdown to reduce initial bundle size
 const ReactMarkdown = lazy(() => import('react-markdown'));
@@ -50,6 +50,8 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   imageUrl?: string;
+  attachedImageUrl?: string;
+  attachedAudioUrl?: string;
   timestamp: Date;
 }
 
@@ -67,6 +69,30 @@ const MessageItem = memo(({ message }: { message: Message }) => (
     </div>
     <div className={`flex flex-col max-w-[85%] ${message.role === 'assistant' ? '' : 'items-end'}`}>
       <div className={`w-full ${message.role === 'assistant' ? '' : 'bg-white/5 p-4 rounded-2xl border border-brand-border'}`}>
+        {message.attachedImageUrl && (
+          <div className="mb-3 rounded-lg overflow-hidden border border-white/10 max-w-sm">
+            <img 
+              src={message.attachedImageUrl} 
+              alt="Anexo" 
+              className="w-full h-auto object-cover"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+        )}
+        {message.attachedAudioUrl && (
+          <div className="mb-3 p-4 rounded-2xl bg-brand-accent/5 border border-brand-accent/20 flex flex-col gap-3 max-w-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-brand-accent/20 flex items-center justify-center flex-shrink-0">
+                <Volume2 className="w-5 h-5 text-brand-accent" />
+              </div>
+              <div className="flex-1">
+                <p className="text-xs font-medium text-brand-accent/80 uppercase tracking-wider">Mensagem de Áudio</p>
+                <p className="text-[10px] text-gray-500">Clique para ouvir</p>
+              </div>
+            </div>
+            <audio controls src={message.attachedAudioUrl} className="h-10 w-full custom-audio" />
+          </div>
+        )}
         <div className="markdown-body">
           <Suspense fallback={<div className="animate-pulse h-4 bg-white/5 rounded w-3/4 mb-2"></div>}>
             <ReactMarkdown>{message.content}</ReactMarkdown>
@@ -97,6 +123,8 @@ const ChatInput = memo(({
   handleSend, 
   isLoading, 
   placeholder,
+  selectedFile,
+  setSelectedFile,
   isSmall = false
 }: { 
   input: string, 
@@ -104,9 +132,21 @@ const ChatInput = memo(({
   handleSend: () => void, 
   isLoading: boolean, 
   placeholder: string,
+  selectedFile: File | null,
+  setSelectedFile: (file: File | null) => void,
   isSmall?: boolean
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [fileType, setFileType] = useState<'image' | 'audio' | null>(null);
+  
+  // Recording states
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -115,34 +155,193 @@ const ChatInput = memo(({
     }
   }, [input]);
 
+  useEffect(() => {
+    if (selectedFile) {
+      const url = URL.createObjectURL(selectedFile);
+      setPreviewUrl(url);
+      setFileType(selectedFile.type.startsWith('image/') ? 'image' : 'audio');
+      return () => URL.revokeObjectURL(url);
+    } else {
+      setPreviewUrl(null);
+      setFileType(null);
+    }
+  }, [selectedFile]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const isImage = file.type.startsWith('image/');
+      const isAudio = file.type.startsWith('audio/');
+      
+      if (!isImage && !isAudio) {
+        alert("Por favor, selecione uma imagem ou um arquivo de áudio.");
+        return;
+      }
+
+      if (file.size > 10 * 1024 * 1024) {
+        alert("O arquivo é muito grande. O limite é 10MB.");
+        return;
+      }
+      setSelectedFile(file);
+    }
+  };
+
+  const startRecording = async () => {
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      alert("O seu navegador não suporta gravação de áudio.");
+      return;
+    }
+
+    try {
+      console.log("Solicitando acesso ao microfone...");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log("Acesso concedido.");
+      
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
+        ? 'audio/webm' 
+        : MediaRecorder.isTypeSupported('audio/mp4') 
+          ? 'audio/mp4' 
+          : 'audio/ogg';
+          
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        const extension = mimeType.split('/')[1].split(';')[0];
+        const file = new File([audioBlob], `recording-${Date.now()}.${extension}`, { type: mimeType });
+        setSelectedFile(file);
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingDuration(0);
+      
+      timerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+    } catch (err: any) {
+      console.error("Error accessing microphone:", err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        alert("Acesso ao microfone negado. Por favor, permita o acesso nas configurações do navegador.");
+      } else {
+        alert(`Erro ao acessar o microfone: ${err.message || 'Erro desconhecido'}`);
+      }
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
     <div className="neon-border-container group">
       <div className={`relative bg-brand-surface rounded-[15px] p-2 shadow-2xl ${isSmall ? '' : 'border border-white/5'}`}>
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder={placeholder}
-          className={`w-full p-4 bg-transparent border-none focus:ring-0 text-white placeholder-gray-600 resize-none ${isSmall ? 'min-h-[56px] max-h-40 text-base' : 'min-h-[100px] text-lg'}`}
-          rows={1}
-        />
+        {previewUrl && (
+          <div className="px-4 pt-4 pb-2">
+            <div className="relative inline-block">
+              {fileType === 'image' ? (
+                <img 
+                  src={previewUrl} 
+                  alt="Preview" 
+                  className="h-20 w-auto rounded-lg border border-white/10 object-cover"
+                />
+              ) : (
+                <div className="h-20 w-40 flex flex-col items-center justify-center bg-white/5 rounded-lg border border-white/10 p-2">
+                  <Volume2 className="w-6 h-6 text-brand-accent mb-1" />
+                  <span className="text-[10px] text-gray-400 truncate w-full text-center">{selectedFile?.name}</span>
+                </div>
+              )}
+              <button 
+                onClick={() => setSelectedFile(null)}
+                className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full shadow-lg hover:bg-red-600 transition-colors"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        )}
+        
+        {isRecording ? (
+          <div className={`w-full p-4 flex items-center justify-between bg-brand-accent/5 rounded-xl mb-2 animate-pulse ${isSmall ? 'min-h-[56px]' : 'min-h-[100px]'}`}>
+            <div className="flex items-center gap-3">
+              <div className="w-3 h-3 rounded-full bg-red-500 animate-ping" />
+              <span className="text-white font-medium tracking-wider">Gravando... {formatDuration(recordingDuration)}</span>
+            </div>
+            <button 
+              onClick={stopRecording}
+              className="p-2 bg-red-500/20 text-red-500 rounded-full hover:bg-red-500/30 transition-all"
+            >
+              <Square className="w-5 h-5 fill-current" />
+            </button>
+          </div>
+        ) : (
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder={placeholder}
+            className={`w-full p-4 bg-transparent border-none focus:ring-0 focus:outline-none caret-brand-accent text-white placeholder-gray-600 resize-none ${isSmall ? 'min-h-[56px] max-h-40 text-base' : 'min-h-[100px] text-lg'}`}
+            rows={1}
+          />
+        )}
+
         <div className={`flex items-center justify-between px-2 ${isSmall ? 'pb-1' : 'pb-2'}`}>
           <div className="flex items-center gap-1">
-            <button className="p-2 text-gray-600 hover:text-brand-accent hover:bg-brand-accent/10 rounded-lg transition-all">
+            <input 
+              type="file" 
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept="image/*,audio/*"
+              className="hidden"
+            />
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isRecording}
+              className={`p-2 rounded-lg transition-all ${selectedFile ? 'text-brand-accent bg-brand-accent/10' : 'text-gray-600 hover:text-brand-accent hover:bg-brand-accent/10 disabled:opacity-50'}`}
+            >
               <Paperclip className={isSmall ? "w-4 h-4" : "w-5 h-5"} />
+            </button>
+            
+            <button 
+              onClick={startRecording}
+              disabled={isRecording || isLoading || !!selectedFile}
+              className={`p-2 rounded-lg transition-all text-gray-600 hover:text-brand-accent hover:bg-brand-accent/10 disabled:opacity-50`}
+            >
+              <Mic className={isSmall ? "w-4 h-4" : "w-5 h-5"} />
             </button>
           </div>
           <button
             onClick={() => handleSend()}
-            disabled={!input.trim() || isLoading}
+            disabled={(!input.trim() && !selectedFile) || isLoading || isRecording}
             className={`p-2 rounded-xl transition-all ${
-              !input.trim() || isLoading
+              (!input.trim() && !selectedFile) || isLoading || isRecording
                 ? 'text-gray-700 bg-white/5' 
                 : `text-white bg-brand-accent hover:bg-brand-accent/80 hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(99,102,241,0.3)]`
             }`}
@@ -168,6 +367,7 @@ export default function AppWrapper() {
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [greeting, setGreeting] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -191,8 +391,20 @@ function App() {
     return () => clearTimeout(timeout);
   }, [messages]);
 
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        const base64String = (reader.result as string).split(',')[1];
+        resolve(base64String);
+      };
+      reader.onerror = error => reject(error);
+    });
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && !selectedFile) || isLoading) return;
 
     // Check if API key is configured
     if (!import.meta.env.VITE_GEMINI_API_KEY) {
@@ -205,16 +417,45 @@ function App() {
       return;
     }
 
+    let attachedImageUrl = "";
+    let attachedAudioUrl = "";
+    let filePart = null;
+
+    if (selectedFile) {
+      const isImage = selectedFile.type.startsWith('image/');
+      const isAudio = selectedFile.type.startsWith('audio/');
+      
+      const fileUrl = URL.createObjectURL(selectedFile);
+      if (isImage) attachedImageUrl = fileUrl;
+      else if (isAudio) attachedAudioUrl = fileUrl;
+
+      try {
+        const base64 = await fileToBase64(selectedFile);
+        filePart = {
+          inlineData: {
+            data: base64,
+            mimeType: selectedFile.type
+          }
+        };
+      } catch (e) {
+        console.error("Error converting file to base64", e);
+      }
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim(),
+      content: input.trim() || (selectedFile ? (selectedFile.type.startsWith('image/') ? "Analise esta imagem." : "Analise este áudio.") : ""),
+      attachedImageUrl,
+      attachedAudioUrl,
       timestamp: new Date(),
     };
 
     setMessages(prev => [...prev, userMessage]);
     const currentInput = input.trim();
+    const currentFile = selectedFile;
     setInput('');
+    setSelectedFile(null);
     
     setIsLoading(true);
 
@@ -230,14 +471,26 @@ function App() {
         timestamp: new Date(),
       }]);
 
+      // Prepare contents for multimodal call
+      const history = messages.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }]
+      }));
+
+      const currentParts: any[] = [{ text: userMessage.content }];
+      if (filePart) {
+        currentParts.push(filePart);
+      }
+
       const response = await genAI.models.generateContentStream({
         model: "gemini-3-flash-preview",
-        contents: [...messages, userMessage].map(m => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }]
-        })),
+        contents: [
+          ...history,
+          { role: 'user', parts: currentParts }
+        ],
         config: {
-          systemInstruction: "Você é a MUH ai, uma inteligência artificial avançada, prestativa e amigável, com uma personalidade similar ao Claude. Suas respostas devem ser claras, precisas e em português brasileiro. Use markdown para formatar suas respostas quando apropriado.",
+          systemInstruction: "Você é a MUH ai, uma IA rápida e eficiente. Responda em português brasileiro de forma direta e amigável. Use markdown.",
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         }
       });
 
@@ -320,6 +573,8 @@ function App() {
                   handleSend={handleSend}
                   isLoading={isLoading}
                   placeholder="Comece uma nova conversa..."
+                  selectedFile={selectedFile}
+                  setSelectedFile={setSelectedFile}
                 />
                 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
@@ -342,7 +597,7 @@ function App() {
               </div>
             </div>
           ) : (
-            <div className="space-y-12 pb-32">
+            <div className="space-y-12 pb-60">
               <AnimatePresence initial={false}>
                 {messages.map((message) => (
                   <MessageItem key={message.id} message={message} />
@@ -364,6 +619,8 @@ function App() {
               handleSend={handleSend}
               isLoading={isLoading}
               placeholder="Responda à MUH ai..."
+              selectedFile={selectedFile}
+              setSelectedFile={setSelectedFile}
               isSmall={true}
             />
             <p className="text-[10px] text-center text-gray-600 mt-3 font-medium">
