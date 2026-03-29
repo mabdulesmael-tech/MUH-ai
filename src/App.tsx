@@ -1,21 +1,7 @@
 import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, LogIn, LogOut } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  onAuthStateChanged, 
-  signOut,
-  User as FirebaseUser 
-} from 'firebase/auth';
-import { 
-  doc, 
-  getDoc, 
-  setDoc, 
-  updateDoc 
-} from 'firebase/firestore';
+import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe } from 'lucide-react';
 
 // Lazy load ReactMarkdown to reduce initial bundle size
 const ReactMarkdown = lazy(() => import('react-markdown'));
@@ -37,20 +23,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 
   render() {
     if (this.state.hasError) {
-      let errorMessage = "Ocorreu um erro inesperado.";
-      try {
-        const parsedError = JSON.parse(this.state.error.message);
-        if (parsedError.error) {
-          errorMessage = `Erro no banco de dados: ${parsedError.error}`;
-        }
-      } catch (e) {
-        // Not a JSON error
-      }
-
       return (
         <div className="flex flex-col items-center justify-center h-screen bg-brand-dark text-white p-6 text-center">
           <h2 className="text-2xl font-bold text-red-500 mb-4">Ops! Algo deu errado.</h2>
-          <p className="text-gray-400 mb-6 max-w-md">{errorMessage}</p>
+          <p className="text-gray-400 mb-6 max-w-md">Ocorreu um erro inesperado.</p>
           <button 
             onClick={() => window.location.reload()}
             className="px-6 py-2 bg-brand-accent rounded-lg hover:bg-brand-accent/80 transition-all"
@@ -189,63 +165,11 @@ export default function AppWrapper() {
 }
 
 function App() {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [greeting, setGreeting] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      setIsAuthReady(true);
-
-      if (currentUser) {
-        // Sync user data to Firestore
-        const userRef = doc(db, 'users', currentUser.uid);
-        try {
-          const userDoc = await getDoc(userRef);
-          if (!userDoc.exists()) {
-            await setDoc(userRef, {
-              uid: currentUser.uid,
-              displayName: currentUser.displayName,
-              email: currentUser.email,
-              photoURL: currentUser.photoURL,
-              createdAt: new Date().toISOString(),
-              lastLogin: new Date().toISOString()
-            });
-          } else {
-            await updateDoc(userRef, {
-              lastLogin: new Date().toISOString()
-            });
-          }
-        } catch (error) {
-          handleFirestoreError(error, OperationType.WRITE, `users/${currentUser.uid}`);
-        }
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login error:", error);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setMessages([]);
-    } catch (error) {
-      console.error("Logout error:", error);
-    }
-  };
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -265,8 +189,6 @@ function App() {
     const timeout = setTimeout(scrollToBottom, 100);
     return () => clearTimeout(timeout);
   }, [messages]);
-
-  // Input auto-resize logic moved to ChatInput component
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -333,48 +255,6 @@ function App() {
     setMessages([]);
   };
 
-  if (!isAuthReady) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-brand-dark">
-        <Loader2 className="w-8 h-8 text-brand-accent animate-spin" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-brand-dark text-white p-6">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="w-full max-w-md"
-        >
-          <div className="neon-border-container">
-            <div className="bg-brand-surface rounded-[15px] p-8 text-center shadow-2xl border border-white/5">
-              <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-brand-accent/20">
-                <Sparkles className="w-8 h-8 text-brand-accent" />
-              </div>
-              <h1 className="text-3xl font-bold mb-2 tracking-tight">Bem-vindo à MUH ai</h1>
-              <p className="text-gray-400 mb-8 text-sm">Faça login para começar a usar a inteligência artificial mais avançada.</p>
-              
-              <button 
-                onClick={handleLogin}
-                className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-white text-black font-semibold rounded-xl hover:bg-gray-200 transition-all active:scale-[0.98] shadow-[0_0_20px_rgba(255,255,255,0.1)]"
-              >
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/listview/google.svg" alt="Google" className="w-5 h-5" />
-                Entrar com Google
-              </button>
-              
-              <p className="mt-6 text-[10px] text-gray-600 uppercase tracking-widest font-bold">
-                Seguro • Rápido • Inteligente
-              </p>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col h-screen bg-brand-dark text-gray-200">
       {/* Header */}
@@ -392,24 +272,9 @@ function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {user && (
-            <div className="flex items-center gap-3">
-              <button 
-                onClick={handleLogout}
-                className="p-2 text-gray-500 hover:text-red-500 transition-colors"
-                title="Sair"
-              >
-                <LogOut className="w-5 h-5" />
-              </button>
-              <div className="w-8 h-8 bg-brand-accent/10 rounded-full flex items-center justify-center border border-brand-accent/20 overflow-hidden">
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt={user.displayName || ""} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                ) : (
-                  <User className="w-4 h-4 text-brand-accent" />
-                )}
-              </div>
-            </div>
-          )}
+          <div className="w-8 h-8 bg-brand-accent/10 rounded-full flex items-center justify-center border border-brand-accent/20 overflow-hidden">
+            <Bot className="w-4 h-4 text-brand-accent" />
+          </div>
         </div>
       </header>
 
