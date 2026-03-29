@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-brand-accent: #6366f1; /* Indigo accent like Writon */
+  --color-brand-dark: #050505;
+  --color-brand-surface: #0f0f0f;
+  --color-brand-border: #1f1f1f;
+}
+
+@layer base {
+  body {
+    @apply bg-brand-dark text-gray-300 font-sans antialiased;
+  }
+}
+
+.markdown-body {
+  @apply text-[15px] leading-relaxed text-gray-300;
+}
+
+.markdown-body p {
+  @apply mb-4 last:mb-0;
+}
+
+.markdown-body ul, .markdown-body ol {
+  @apply mb-4 ml-6;
+}
+
+.markdown-body ul {
+  @apply list-disc;
+}
+
+.markdown-body ol {
+  @apply list-decimal;
+}
+
+.markdown-body code {
+  @apply font-mono bg-white/5 px-1.5 py-0.5 rounded text-[13px] text-brand-accent;
+}
+
+.markdown-body pre {
+  @apply font-mono bg-black/40 border border-brand-border text-gray-300 p-4 rounded-xl overflow-x-auto mb-4 text-[13px];
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  @apply font-semibold mb-3 mt-6 first:mt-0 text-white;
+}
+
+.markdown-body h1 { @apply text-2xl; }
+.markdown-body h2 { @apply text-xl; }
+.markdown-body h3 { @apply text-lg; }
+
+.markdown-body a {
+  @apply text-brand-accent hover:underline;
+}
+
+@keyframes neon-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.neon-border-container {
+  position: relative;
+  border-radius: 1rem;
+  padding: 1px;
+  background: linear-gradient(90deg, #6366f1, #a855f7, #6366f1);
+  background-size: 200% 200%;
+  animation: neon-flow 4s linear infinite;
+  box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+}
+
+.neon-border-container::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(90deg, #6366f1, #a855f7, #6366f1);
+  background-size: 200% 200%;
+  animation: neon-flow 4s linear infinite;
+  filter: blur(8px);
+  opacity: 0.4;
+  border-radius: 1.1rem;
+  z-index: -1;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-white/5 rounded-full hover:bg-white/10 transition-colors;
+}
