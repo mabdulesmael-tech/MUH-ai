@@ -1,10 +1,100 @@
-import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense, useCallback } from 'react';
+import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense, useCallback, createContext, useContext } from 'react';
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2, Menu, X, MessageSquare, History } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2, Menu, X, MessageSquare, History, LogOut, Mail, Github, Facebook, Apple } from 'lucide-react';
+import { 
+  signInWithPopup, 
+  onAuthStateChanged, 
+  signOut, 
+  User as FirebaseUser,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile
+} from 'firebase/auth';
+import { 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs, 
+  query, 
+  orderBy, 
+  onSnapshot, 
+  addDoc, 
+  serverTimestamp, 
+  Timestamp, 
+  deleteDoc, 
+  writeBatch,
+  getDocFromServer
+} from 'firebase/firestore';
+import { auth, db, googleProvider, facebookProvider, appleProvider } from './firebase';
 
 // Lazy load ReactMarkdown to reduce initial bundle size
 const ReactMarkdown = lazy(() => import('react-markdown'));
+
+// Firestore Error Handling
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// Test connection to Firestore
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if(error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Please check your Firebase configuration. ");
+    }
+  }
+}
+testConnection();
 
 // Error Boundary Component
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: any }> {
@@ -42,7 +132,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 }
 
 // Initialize Gemini API
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+const apiKey = process.env.GEMINI_API_KEY || "";
 const genAI = new GoogleGenAI({ apiKey });
 
 interface Message {
@@ -52,14 +142,190 @@ interface Message {
   imageUrl?: string;
   attachedImageUrl?: string;
   attachedAudioUrl?: string;
-  timestamp: Date;
+  timestamp: Date | Timestamp;
 }
 
 interface ChatSession {
   id: string;
   title: string;
   messages: Message[];
-  updatedAt: Date;
+  updatedAt: Date | Timestamp;
+  userId: string;
+}
+
+// Auth Context
+const AuthContext = createContext<{
+  user: FirebaseUser | null;
+  loading: boolean;
+} | undefined>(undefined);
+
+function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setLoading(false);
+      
+      if (user) {
+        // Sync user to Firestore
+        const userRef = doc(db, 'users', user.uid);
+        getDoc(userRef).then((docSnap) => {
+          if (!docSnap.exists()) {
+            // Create new user
+            setDoc(userRef, {
+              uid: user.uid,
+              displayName: user.displayName,
+              email: user.email,
+              photoURL: user.photoURL,
+              createdAt: serverTimestamp(),
+              role: 'user'
+            }).catch(err => handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}`));
+          } else {
+            // Update existing user only if info changed
+            const data = docSnap.data();
+            const updates: any = {};
+            if (data.displayName !== user.displayName) updates.displayName = user.displayName;
+            if (data.photoURL !== user.photoURL) updates.photoURL = user.photoURL;
+            
+            if (Object.keys(updates).length > 0) {
+              setDoc(userRef, updates, { merge: true })
+                .catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`));
+            }
+          }
+        }).catch(err => handleFirestoreError(err, OperationType.GET, `users/${user.uid}`));
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ user, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+function useAuth() {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}
+
+// Login Component
+function Login() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSocialLogin = async (provider: any) => {
+    setError('');
+    setLoading(true);
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-brand-dark flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl p-8 shadow-2xl"
+      >
+        <div className="flex flex-col items-center text-center mb-8">
+          <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
+            <Bot className="w-8 h-8 text-brand-accent" />
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">MUH ai</h2>
+          <p className="text-gray-400 text-sm">Entre ou crie uma conta para começar</p>
+        </div>
+
+        <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">E-mail</label>
+            <input 
+              type="email" 
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white focus:ring-1 focus:ring-brand-accent focus:outline-none"
+              placeholder="seu@email.com"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Senha</label>
+            <input 
+              type="password" 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white focus:ring-1 focus:ring-brand-accent focus:outline-none"
+              placeholder="••••••••"
+              required
+            />
+          </div>
+          {error && <p className="text-red-500 text-xs">{error}</p>}
+          <button 
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : (isSignUp ? 'Criar Conta' : 'Entrar')}
+          </button>
+        </form>
+
+        <div className="relative mb-6">
+          <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-brand-border"></div></div>
+          <div className="relative flex justify-center text-xs uppercase"><span className="bg-brand-surface px-2 text-gray-500">Ou continue com</span></div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <button onClick={() => handleSocialLogin(googleProvider)} className="flex items-center justify-center gap-2 p-3 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 transition-all">
+            <Globe className="w-4 h-4 text-white" />
+            <span className="text-xs font-medium text-white">Google</span>
+          </button>
+          <button onClick={() => handleSocialLogin(facebookProvider)} className="flex items-center justify-center gap-2 p-3 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 transition-all">
+            <Facebook className="w-4 h-4 text-blue-500" />
+            <span className="text-xs font-medium text-white">Facebook</span>
+          </button>
+          <button onClick={() => handleSocialLogin(appleProvider)} className="flex items-center justify-center gap-2 p-3 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 transition-all">
+            <Apple className="w-4 h-4 text-white" />
+            <span className="text-xs font-medium text-white">Apple</span>
+          </button>
+          <button onClick={() => setIsSignUp(!isSignUp)} className="flex items-center justify-center gap-2 p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-xl hover:bg-brand-accent/20 transition-all">
+            <Mail className="w-4 h-4 text-brand-accent" />
+            <span className="text-xs font-medium text-brand-accent">{isSignUp ? 'Já tenho conta' : 'Criar conta'}</span>
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
 }
 
 // Memoized Message Item for performance
@@ -366,72 +632,76 @@ ChatInput.displayName = 'ChatInput';
 export default function AppWrapper() {
   return (
     <ErrorBoundary>
-      <App />
+      <AuthProvider>
+        <App />
+      </AuthProvider>
     </ErrorBoundary>
   );
 }
 
 function App() {
+  const { user, loading: authLoading } = useAuth();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [userName, setUserName] = useState<string | null>(null);
-  const [isNameModalOpen, setIsNameModalOpen] = useState(false);
-  const [tempName, setTempName] = useState('');
   const [input, setInput] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [greeting, setGreeting] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load sessions and username from localStorage on mount
+  // Fetch sessions from Firestore
   useEffect(() => {
-    const savedName = localStorage.getItem('muh_ai_username');
-    if (savedName) {
-      setUserName(savedName);
-    } else {
-      setIsNameModalOpen(true);
-    }
+    if (!user) return;
 
-    const savedSessions = localStorage.getItem('muh_ai_sessions');
-    if (savedSessions) {
-      try {
-        const parsed = JSON.parse(savedSessions);
-        // Convert string dates back to Date objects
-        const formatted = parsed.map((s: any) => ({
-          ...s,
-          updatedAt: new Date(s.updatedAt),
-          messages: s.messages.map((m: any) => ({
-            ...m,
-            timestamp: new Date(m.timestamp)
-          }))
-        }));
-        setSessions(formatted);
-        if (formatted.length > 0) {
-          setActiveSessionId(formatted[0].id);
-        }
-      } catch (e) {
-        console.error("Error parsing saved sessions", e);
+    const sessionsRef = collection(db, 'users', user.uid, 'sessions');
+    const q = query(sessionsRef, orderBy('updatedAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedSessions = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        updatedAt: (doc.data().updatedAt as Timestamp)?.toDate() || new Date(),
+        messages: [] // Messages are fetched separately
+      })) as ChatSession[];
+      
+      setSessions(fetchedSessions);
+      
+      if (fetchedSessions.length > 0 && !activeSessionId) {
+        setActiveSessionId(fetchedSessions[0].id);
       }
-    }
-  }, []);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/sessions`);
+    });
 
-  // Save sessions to localStorage whenever they change
+    return unsubscribe;
+  }, [user]);
+
+  // Fetch messages for active session
   useEffect(() => {
-    if (sessions.length > 0) {
-      localStorage.setItem('muh_ai_sessions', JSON.stringify(sessions));
-    }
-  }, [sessions]);
+    if (!user || !activeSessionId) return;
 
-  const saveUserName = useCallback(() => {
-    if (tempName.trim()) {
-      setUserName(tempName.trim());
-      localStorage.setItem('muh_ai_username', tempName.trim());
-      setIsNameModalOpen(false);
-      window.location.reload();
-    }
-  }, [tempName]);
+    const messagesRef = collection(db, 'users', user.uid, 'sessions', activeSessionId, 'messages');
+    const q = query(messagesRef, orderBy('timestamp', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedMessages = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        timestamp: (doc.data().timestamp as Timestamp)?.toDate() || new Date()
+      })) as Message[];
+
+      setSessions(prev => prev.map(s => 
+        s.id === activeSessionId ? { ...s, messages: fetchedMessages } : s
+      ));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/sessions/${activeSessionId}/messages`);
+    });
+
+    return unsubscribe;
+  }, [user, activeSessionId]);
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const messages = activeSession?.messages || [];
@@ -457,29 +727,52 @@ function App() {
     }
   }, [messages, scrollToBottom]);
 
-  const createNewSession = useCallback(() => {
-    const newSession: ChatSession = {
-      id: Date.now().toString(),
-      title: 'Nova conversa',
-      messages: [],
-      updatedAt: new Date(),
-    };
-    setSessions(prev => [newSession, ...prev]);
-    setActiveSessionId(newSession.id);
-    setIsSidebarOpen(false);
-  }, []);
+  const createNewSession = useCallback(async () => {
+    if (!user) return;
+    try {
+      const sessionsRef = collection(db, 'users', user.uid, 'sessions');
+      const newSessionDoc = await addDoc(sessionsRef, {
+        title: 'Nova conversa',
+        updatedAt: serverTimestamp(),
+        userId: user.uid
+      });
+      setActiveSessionId(newSessionDoc.id);
+      setIsSidebarOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/sessions`);
+    }
+  }, [user]);
 
-  const deleteSession = useCallback((id: string, e: React.MouseEvent) => {
+  const deleteSession = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setSessions(prev => {
-      const newSessions = prev.filter(s => s.id !== id);
-      if (newSessions.length === 0) {
-        localStorage.removeItem('muh_ai_sessions');
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'sessions', id));
+      if (activeSessionId === id) {
+        setActiveSessionId(sessions.find(s => s.id !== id)?.id || null);
       }
-      return newSessions;
-    });
-    setActiveSessionId(prev => prev === id ? (sessions.length > 1 ? sessions.find(s => s.id !== id)?.id || null : null) : prev);
-  }, [sessions]);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/sessions/${id}`);
+    }
+  }, [user, activeSessionId, sessions]);
+
+  const clearAllSessions = useCallback(async () => {
+    if (!user) return;
+    try {
+      const batch = writeBatch(db);
+      const sessionsRef = collection(db, 'users', user.uid, 'sessions');
+      const snapshot = await getDocs(sessionsRef);
+      snapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+      setSessions([]);
+      setActiveSessionId(null);
+      setIsClearModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/sessions`);
+    }
+  }, [user]);
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -494,33 +787,35 @@ function App() {
   };
 
   const handleSend = useCallback(async () => {
-    if ((!input.trim() && !selectedFile) || isLoading) return;
+    if ((!input.trim() && !selectedFile) || isLoading || !user) return;
 
     // Ensure we have an active session
     let currentSessionId = activeSessionId;
     if (!currentSessionId) {
-      const newSession: ChatSession = {
-        id: Date.now().toString(),
-        title: input.trim().substring(0, 30) || 'Nova conversa',
-        messages: [],
-        updatedAt: new Date(),
-      };
-      setSessions(prev => [newSession, ...prev]);
-      setActiveSessionId(newSession.id);
-      currentSessionId = newSession.id;
+      try {
+        const sessionsRef = collection(db, 'users', user.uid, 'sessions');
+        const newSessionDoc = await addDoc(sessionsRef, {
+          title: input.trim().substring(0, 30) || 'Nova conversa',
+          updatedAt: serverTimestamp(),
+          userId: user.uid
+        });
+        currentSessionId = newSessionDoc.id;
+        setActiveSessionId(currentSessionId);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/sessions`);
+        return;
+      }
     }
 
     // Check if API key is configured
-    if (!import.meta.env.VITE_GEMINI_API_KEY) {
+    if (!process.env.GEMINI_API_KEY) {
       const errorMsg: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: "⚠️ **Configuração Necessária:** A chave de API (`VITE_GEMINI_API_KEY`) não foi encontrada. No Cloudflare Pages, adicione-a em 'Environment variables' nas configurações de build.",
+        content: "⚠️ **Configuração Necessária:** A chave de API não foi encontrada. Por favor, verifique as configurações do ambiente.",
         timestamp: new Date(),
       };
-      setSessions(prev => prev.map(s => 
-        s.id === currentSessionId ? { ...s, messages: [...s.messages, errorMsg] } : s
-      ));
+      // For local UI state only if needed, but we prefer syncing
       return;
     }
 
@@ -549,28 +844,34 @@ function App() {
       }
     }
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: input.trim() || (selectedFile ? (selectedFile.type.startsWith('image/') ? "Analise esta imagem." : "Analise este áudio.") : ""),
-      attachedImageUrl,
-      attachedAudioUrl,
-      timestamp: new Date(),
-    };
+    const userMessageContent = input.trim() || (selectedFile ? (selectedFile.type.startsWith('image/') ? "Analise esta imagem." : "Analise este áudio.") : "");
+    
+    try {
+      const messagesRef = collection(db, 'users', user.uid, 'sessions', currentSessionId, 'messages');
+      await addDoc(messagesRef, {
+        role: 'user',
+        content: userMessageContent,
+        attachedImageUrl,
+        attachedAudioUrl,
+        timestamp: serverTimestamp()
+      });
 
-    // Update session with user message and title if it's the first message
-    setSessions(prev => prev.map(s => {
-      if (s.id === currentSessionId) {
-        const isFirstMessage = s.messages.length === 0;
-        return {
-          ...s,
-          title: isFirstMessage ? (input.trim().substring(0, 40) || 'Conversa com anexo') : s.title,
-          messages: [...s.messages, userMessage],
-          updatedAt: new Date()
-        };
+      // Update session title if it's the first message
+      if (messages.length === 0) {
+        const sessionRef = doc(db, 'users', user.uid, 'sessions', currentSessionId);
+        await setDoc(sessionRef, {
+          title: userMessageContent.substring(0, 40),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      } else {
+        const sessionRef = doc(db, 'users', user.uid, 'sessions', currentSessionId);
+        await setDoc(sessionRef, {
+          updatedAt: serverTimestamp()
+        }, { merge: true });
       }
-      return s;
-    }));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/sessions/${currentSessionId}/messages`);
+    }
 
     const currentInput = input.trim();
     setInput('');
@@ -579,88 +880,120 @@ function App() {
     setIsLoading(true);
 
     try {
-      const assistantMessageId = (Date.now() + 1).toString();
       let assistantContent = "";
-
-      setSessions(prev => prev.map(s => 
-        s.id === currentSessionId ? { 
-          ...s, 
-          messages: [...s.messages, {
-            id: assistantMessageId,
-            role: 'assistant',
-            content: '',
-            timestamp: new Date(),
-          }] 
-        } : s
-      ));
+      const assistantMessageRef = await addDoc(collection(db, 'users', user.uid, 'sessions', currentSessionId, 'messages'), {
+        role: 'assistant',
+        content: '',
+        timestamp: serverTimestamp()
+      });
 
       // Prepare history from the current state of the session
-      // We use the functional update pattern or a ref to get the most recent state if needed,
-      // but here we can just use the current session messages.
-      const history = messages.slice(-10).map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }]
-      }));
+      const filteredMessages = messages.filter(m => m.content && m.content.trim() !== "");
+      
+      // Ensure history starts with 'user' and alternates roles
+      let history: any[] = [];
+      let lastRole: string | null = null;
+      
+      // Take last 10 messages and filter for alternating roles starting with user
+      const recentMessages = filteredMessages.slice(-10);
+      for (const m of recentMessages) {
+        const role = m.role === 'assistant' ? 'model' : 'user';
+        if (history.length === 0 && role !== 'user') continue;
+        if (role === lastRole) continue;
+        
+        history.push({
+          role,
+          parts: [{ text: m.content }]
+        });
+        lastRole = role;
+      }
+      
+      // Ensure history ends with 'model' so the next message can be 'user'
+      if (history.length > 0 && history[history.length - 1].role === 'user') {
+        history.pop();
+      }
 
-      const currentParts: any[] = [{ text: userMessage.content }];
+      const currentParts: any[] = [{ text: userMessageContent }];
       if (filePart) {
         currentParts.push(filePart);
       }
 
-      const response = await genAI.models.generateContentStream({
-        model: "gemini-3-flash-preview",
-        contents: [
-          ...history,
-          { role: 'user', parts: currentParts }
-        ],
-        config: {
-          systemInstruction: `Você é a MUH ai, uma IA rápida e eficiente. O nome do usuário é ${userName || 'Utilizador'}. Trate-o de forma amigável e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
-          maxOutputTokens: 4096,
+      // Retry logic for transient errors
+      let retryCount = 0;
+      const maxRetries = 2;
+      let success = false;
+
+      while (retryCount <= maxRetries && !success) {
+        try {
+          const response = await genAI.models.generateContentStream({
+            model: "gemini-3-flash-preview",
+            contents: [
+              ...history,
+              { role: 'user', parts: currentParts }
+            ],
+            config: {
+              systemInstruction: `Você é a MUH ai, uma IA rápida e eficiente. O nome do usuário é ${user.displayName || 'Utilizador'}. Trate-o de forma amigável e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
+            }
+          });
+
+          for await (const chunk of response) {
+            if (chunk.candidates?.[0]?.finishReason === 'SAFETY' || chunk.candidates?.[0]?.finishReason === 'OTHER') {
+              assistantContent += "\n\n⚠️ *[Resposta interrompida por filtros de segurança ou erro técnico]*";
+              break;
+            }
+
+            const chunkText = chunk.text || "";
+            if (!chunkText) continue;
+            assistantContent += chunkText;
+            
+            // Update assistant message in Firestore
+            await setDoc(assistantMessageRef, {
+              content: assistantContent
+            }, { merge: true });
+          }
+          success = true;
+        } catch (error: any) {
+          console.error(`Attempt ${retryCount + 1} failed:`, error);
+          retryCount++;
+          if (retryCount > maxRetries) throw error;
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
         }
-      });
-
-      for await (const chunk of response) {
-        const chunkText = chunk.text || "";
-        if (!chunkText) continue;
-        assistantContent += chunkText;
-        
-        setSessions(prev => prev.map(s => 
-          s.id === currentSessionId ? {
-            ...s,
-            messages: s.messages.map(m => 
-              m.id === assistantMessageId ? { ...m, content: assistantContent } : m
-            )
-          } : s
-        ));
       }
-
     } catch (error: any) {
       console.error("Error calling Gemini API:", error);
       let errorMessage = "Desculpe, ocorreu um erro ao processar sua solicitação. Por favor, tente novamente.";
       
       if (error?.message?.includes("API key not valid")) {
-        errorMessage = "⚠️ **Chave de API Inválida:** A chave de API configurada não é válida. Verifique as configurações no painel do Vercel.";
+        errorMessage = "⚠️ **Chave de API Inválida:** A chave de API configurada não é válida.";
       } else if (error?.message?.includes("Quota exceeded")) {
-        errorMessage = "⚠️ **Limite Atingido:** O limite de uso da API foi excedido. Tente novamente mais tarde.";
-      } else if (error?.message?.includes("Model not found")) {
-        errorMessage = "⚠️ **Modelo não encontrado:** O modelo selecionado não está disponível ou o nome está incorreto.";
+        errorMessage = "⚠️ **Limite Atingido:** O limite de uso da API foi excedido.";
       }
 
-      setSessions(prev => prev.map(s => 
-        s.id === currentSessionId ? {
-          ...s,
-          messages: [...s.messages, {
-            id: Date.now().toString(),
-            role: 'assistant',
-            content: errorMessage,
-            timestamp: new Date(),
-          }]
-        } : s
-      ));
+      try {
+        await addDoc(collection(db, 'users', user.uid, 'sessions', currentSessionId, 'messages'), {
+          role: 'assistant',
+          content: errorMessage,
+          timestamp: serverTimestamp()
+        });
+      } catch (e) {
+        console.error("Error saving error message:", e);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [input, selectedFile, isLoading, activeSessionId, sessions, messages, userName]);
+  }, [input, selectedFile, isLoading, activeSessionId, sessions, messages, user]);
+
+  if (authLoading) {
+    return (
+      <div className="h-screen bg-brand-dark flex items-center justify-center">
+        <Loader2 className="w-12 h-12 text-brand-accent animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
 
   return (
     <div className="flex h-screen bg-brand-dark text-gray-200 overflow-hidden">
@@ -714,9 +1047,19 @@ function App() {
           </button>
 
           <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar overflow-x-hidden">
-            <div className={`flex items-center gap-2 px-2 mb-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
-              <History className="w-4 h-4 text-gray-500 flex-shrink-0" />
-              {!isSidebarCollapsed && <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Histórico</span>}
+            <div className={`flex items-center justify-between px-2 mb-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                {!isSidebarCollapsed && <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Histórico</span>}
+              </div>
+              {!isSidebarCollapsed && sessions.length > 0 && (
+                <button 
+                  onClick={() => setIsClearModalOpen(true)}
+                  className="text-[10px] text-red-500/70 hover:text-red-500 font-bold uppercase tracking-wider transition-colors"
+                >
+                  Limpar tudo
+                </button>
+              )}
             </div>
             {sessions.length === 0 ? (
               !isSidebarCollapsed && <p className="text-xs text-gray-600 px-2 py-4 italic">Nenhuma conversa guardada.</p>
@@ -754,20 +1097,25 @@ function App() {
 
           <div className="pt-4 border-t border-brand-border mt-4">
             <div className={`flex items-center gap-3 p-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
-              <div className="w-8 h-8 rounded-full bg-brand-accent/20 flex items-center justify-center flex-shrink-0">
-                <User className="w-4 h-4 text-brand-accent" />
+              <div className="w-8 h-8 rounded-full bg-brand-accent/20 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt="User" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <User className="w-4 h-4 text-brand-accent" />
+                )}
               </div>
               {!isSidebarCollapsed && (
                 <>
                   <div className="flex-1 overflow-hidden">
-                    <p className="text-xs font-medium truncate">{userName || 'Utilizador'}</p>
+                    <p className="text-xs font-medium truncate">{user.displayName || user.email?.split('@')[0] || 'Utilizador'}</p>
                     <p className="text-[10px] text-gray-500">Plano Grátis</p>
                   </div>
                   <button 
-                    onClick={() => setIsNameModalOpen(true)}
+                    onClick={() => signOut(auth)}
                     className="p-1.5 hover:bg-white/5 rounded-lg text-gray-600 hover:text-white transition-colors"
+                    title="Sair"
                   >
-                    <Plus className="w-3.5 h-3.5 rotate-45" />
+                    <LogOut className="w-3.5 h-3.5" />
                   </button>
                 </>
               )}
@@ -776,47 +1124,45 @@ function App() {
         </div>
       </aside>
 
-      {/* Name Modal */}
+      {/* Name Modal removed as we use Auth */}
+
+      {/* Clear History Confirmation Modal */}
       <AnimatePresence>
-        {isNameModalOpen && (
+        {isClearModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              onClick={() => setIsClearModalOpen(false)}
               className="absolute inset-0 bg-black/80 backdrop-blur-md"
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl p-8 shadow-2xl"
+              className="relative w-full max-w-sm bg-brand-surface border border-brand-border rounded-2xl p-6 shadow-2xl"
             >
-              <div className="flex flex-col items-center text-center mb-8">
-                <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
-                  <Bot className="w-8 h-8 text-brand-accent" />
+              <div className="flex flex-col items-center text-center mb-6">
+                <div className="w-12 h-12 bg-red-500/10 rounded-xl flex items-center justify-center mb-4 border border-red-500/20">
+                  <Trash2 className="w-6 h-6 text-red-500" />
                 </div>
-                <h3 className="text-2xl font-bold text-white mb-2 tracking-tight">Bem-vindo à MUH ai</h3>
-                <p className="text-gray-400 text-sm">Como é que eu te devo chamar?</p>
+                <h3 className="text-xl font-bold text-white mb-2 tracking-tight">Limpar Histórico?</h3>
+                <p className="text-gray-400 text-sm">Esta ação não pode ser desfeita. Todas as suas conversas serão apagadas permanentemente.</p>
               </div>
               
-              <div className="space-y-4">
-                <div className="neon-border-container">
-                  <input 
-                    type="text" 
-                    value={tempName}
-                    onChange={(e) => setTempName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && saveUserName()}
-                    placeholder="O teu nome..."
-                    className="w-full p-4 bg-brand-surface border-none focus:ring-0 text-white placeholder-gray-600 rounded-[15px] text-center text-lg"
-                  />
-                </div>
+              <div className="flex gap-3">
                 <button 
-                  onClick={saveUserName}
-                  disabled={!tempName.trim()}
-                  className="w-full py-4 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(168,85,247,0.4)]"
+                  onClick={() => setIsClearModalOpen(false)}
+                  className="flex-1 py-3 bg-white/5 text-white font-medium rounded-xl hover:bg-white/10 transition-all border border-white/5"
                 >
-                  Confirmar Nome
+                  Cancelar
+                </button>
+                <button 
+                  onClick={clearAllSessions}
+                  className="flex-1 py-3 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all shadow-[0_0_20px_rgba(239,68,68,0.3)]"
+                >
+                  Limpar Tudo
                 </button>
               </div>
             </motion.div>
@@ -865,7 +1211,7 @@ function App() {
                   animate={{ opacity: 1, y: 0 }}
                   className="text-4xl font-semibold text-white mb-12 tracking-tight"
                 >
-                  {greeting}, {userName?.split(' ')[0] || 'Utilizador'}!
+                  {greeting}, {user.displayName?.split(' ')[0] || user.email?.split('@')[0] || 'Utilizador'}!
                 </motion.h2>
                 
                 <div className="w-full max-w-2xl">

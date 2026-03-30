@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: userId (UID from Firebase Auth)
+    // Fields:
+    //   - uid: string (required, immutable) - Unique user ID
+    //   - displayName: string (optional) - User's display name
+    //   - email: string (required, immutable) - User's email
+    //   - photoURL: string (optional) - URL to profile picture
+    //   - createdAt: timestamp (required, immutable) - Creation time
+    //
+    // Collection: /users/{userId}/sessions/{sessionId}
+    // Document ID: sessionId
+    // Fields:
+    //   - id: string (required, immutable) - Session ID
+    //   - title: string (required, max 100 chars) - Conversation title
+    //   - updatedAt: timestamp (required) - Last update time
+    //   - userId: string (required, immutable) - Owner UID
+    //
+    // Collection: /users/{userId}/sessions/{sessionId}/messages/{messageId}
+    // Document ID: messageId
+    // Fields:
+    //   - id: string (required, immutable) - Message ID
+    //   - role: string (required, enum: ['user', 'assistant']) - Sender role
+    //   - content: string (required, max 10000 chars) - Message text
+    //   - imageUrl: string (optional) - AI generated image URL
+    //   - attachedImageUrl: string (optional) - User attached image URL
+    //   - attachedAudioUrl: string (optional) - User attached audio URL
+    //   - timestamp: timestamp (required, immutable) - Message time
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "mabdulesmael@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.size() > 3 && email.matches(".*@.*\\..*");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*") || url.size() == 0);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'role']) &&
+             data.uid == request.auth.uid &&
+             (data.get('email', null) == null || isValidEmail(data.email)) &&
+             (data.get('displayName', null) == null || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (data.get('photoURL', null) == null || isValidUrl(data.photoURL)) &&
+             data.createdAt is timestamp &&
+             data.role in ['user', 'admin'];
+    }
+
+    function isValidSession(data) {
+      return hasOnlyAllowedFields(['title', 'updatedAt', 'userId']) &&
+             data.title is string && data.title.size() <= 100 &&
+             data.updatedAt is timestamp &&
+             data.userId == request.auth.uid;
+    }
+
+    function isValidMessage(data) {
+      return hasOnlyAllowedFields(['role', 'content', 'imageUrl', 'attachedImageUrl', 'attachedAudioUrl', 'timestamp']) &&
+             data.role in ['user', 'assistant'] &&
+             data.content is string && data.content.size() <= 10000 &&
+             (data.get('imageUrl', null) == null || isValidUrl(data.imageUrl)) &&
+             (data.get('attachedImageUrl', null) == null || isValidUrl(data.attachedImageUrl)) &&
+             (data.get('attachedAudioUrl', null) == null || isValidUrl(data.attachedAudioUrl)) &&
+             data.timestamp is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'user';
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      request.resource.data.role == resource.data.role &&
+                      areImmutableFieldsUnchanged(['uid', 'email', 'createdAt']);
+      
+      match /sessions/{sessionId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidSession(request.resource.data);
+        allow update: if isOwner(userId) && isValidSession(request.resource.data) &&
+                        areImmutableFieldsUnchanged(['id', 'userId']);
+        allow delete: if isOwner(userId) || isAdmin();
+
+        match /messages/{messageId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId) && isValidMessage(request.resource.data);
+          allow update: if isOwner(userId) && isValidMessage(request.resource.data) &&
+                          areImmutableFieldsUnchanged(['id', 'timestamp']);
+          allow delete: if isOwner(userId) || isAdmin();
+        }
+      }
+    }
+  }
+}
