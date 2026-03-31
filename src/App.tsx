@@ -1,101 +1,10 @@
-import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense, useCallback, createContext, useContext } from 'react';
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense, useCallback } from 'react';
+import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2, Menu, X, MessageSquare, History, LogOut, Mail, Github, Facebook, Apple, AlertCircle } from 'lucide-react';
-import { 
-  signInWithPopup, 
-  onAuthStateChanged, 
-  signOut, 
-  User as FirebaseUser,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  updateProfile,
-  sendPasswordResetEmail
-} from 'firebase/auth';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  query, 
-  orderBy, 
-  onSnapshot, 
-  addDoc, 
-  serverTimestamp, 
-  Timestamp, 
-  deleteDoc, 
-  writeBatch,
-  getDocFromServer
-} from 'firebase/firestore';
-import { auth, db, googleProvider, facebookProvider, appleProvider } from './firebase';
+import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2, Menu, X, MessageSquare, History, LogOut, AlertCircle } from 'lucide-react';
 
 // Lazy load ReactMarkdown to reduce initial bundle size
 const ReactMarkdown = lazy(() => import('react-markdown'));
-
-// Firestore Error Handling
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-// Test connection to Firestore
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. ");
-    }
-  }
-}
-testConnection();
 
 // Error Boundary Component
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: any }> {
@@ -143,301 +52,44 @@ interface Message {
   imageUrl?: string;
   attachedImageUrl?: string;
   attachedAudioUrl?: string;
-  timestamp: Date | Timestamp;
+  timestamp: string; // ISO string for local storage
 }
 
 interface ChatSession {
   id: string;
   title: string;
   messages: Message[];
-  updatedAt: Date | Timestamp;
-  userId: string;
+  updatedAt: string; // ISO string for local storage
 }
 
-// Auth Context
-const AuthContext = createContext<{
-  user: FirebaseUser | null;
+// Local Storage Keys
+const STORAGE_KEY = 'muh_ai_data';
+
+interface LocalData {
   nickname: string | null;
-  loading: boolean;
-  setNickname: (name: string) => Promise<void>;
-} | undefined>(undefined);
-
-function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [nickname, setNicknameState] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const setNickname = async (name: string) => {
-    if (!user) return;
-    const userRef = doc(db, 'users', user.uid);
-    try {
-      await setDoc(userRef, { nickname: name }, { merge: true });
-      setNicknameState(name);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
-    }
-  };
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      
-      if (user) {
-        // Sync user to Firestore and get nickname
-        const userRef = doc(db, 'users', user.uid);
-        getDoc(userRef).then((docSnap) => {
-          if (!docSnap.exists()) {
-            // Create new user
-            const newUser = {
-              uid: user.uid,
-              displayName: user.displayName,
-              nickname: null, // Initial nickname is null
-              email: user.email,
-              photoURL: user.photoURL,
-              createdAt: serverTimestamp(),
-              role: 'user'
-            };
-            setDoc(userRef, newUser).catch(err => handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}`));
-            setNicknameState(null);
-          } else {
-            const data = docSnap.data();
-            setNicknameState(data.nickname || null);
-            
-            // Update existing user only if info changed (except nickname)
-            const updates: any = {};
-            if (data.displayName !== user.displayName) updates.displayName = user.displayName;
-            if (data.photoURL !== user.photoURL) updates.photoURL = user.photoURL;
-            
-            if (Object.keys(updates).length > 0) {
-              setDoc(userRef, updates, { merge: true })
-                .catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`));
-            }
-          }
-          setLoading(false);
-        }).catch(err => {
-          handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
-          setLoading(false);
-        });
-      } else {
-        setNicknameState(null);
-        setLoading(false);
-      }
-    });
-    return unsubscribe;
-  }, []);
-
-  return (
-    <AuthContext.Provider value={{ user, nickname, loading, setNickname }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  sessions: ChatSession[];
+  activeSessionId: string | null;
 }
 
-function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+const loadData = (): LocalData => {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY);
+    if (data) {
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error("Error loading data from localStorage", e);
   }
-  return context;
-}
+  return { nickname: null, sessions: [], activeSessionId: null };
+};
 
-// Login Component
-function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleEmailAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
-        // After successful sign up, the AuthProvider will update the user state
-        // and the App component will render. We don't need to navigate here
-        // as the conditional rendering in AppWrapper handles it.
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
-    } catch (err: any) {
-      console.error("Auth error:", err.code, err.message);
-      switch (err.code) {
-        case 'auth/email-already-in-use':
-          setError('Este e-mail já está em uso. Mudamos para o modo de login para você.');
-          setIsSignUp(false);
-          break;
-        case 'auth/invalid-email':
-          setError('O endereço de e-mail não é válido.');
-          break;
-        case 'auth/operation-not-allowed':
-          setError('A operação não é permitida.');
-          break;
-        case 'auth/weak-password':
-          setError('A senha é muito fraca. Use pelo menos 6 caracteres.');
-          break;
-        case 'auth/user-disabled':
-          setError('Esta conta de usuário foi desativada.');
-          break;
-        case 'auth/user-not-found':
-          setError('Usuário não encontrado. Verifique o e-mail ou crie uma conta.');
-          break;
-        case 'auth/wrong-password':
-          setError('Senha incorreta. Tente novamente.');
-          break;
-        case 'auth/invalid-credential':
-          setError('Credenciais inválidas. Verifique seu e-mail e senha.');
-          break;
-        case 'auth/too-many-requests':
-          setError('Muitas tentativas malsucedidas. Tente novamente mais tarde.');
-          break;
-        default:
-          setError('Ocorreu um erro ao autenticar. Por favor, tente novamente.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleForgotPassword = async () => {
-    if (!email) {
-      setError('Por favor, insira seu e-mail para redefinir a senha.');
-      return;
-    }
-    setError('');
-    setLoading(true);
-    try {
-      await sendPasswordResetEmail(auth, email);
-      setError('E-mail de redefinição de senha enviado! Verifique sua caixa de entrada.');
-    } catch (err: any) {
-      console.error("Password reset error:", err.code, err.message);
-      setError('Erro ao enviar e-mail de redefinição. Verifique se o e-mail está correto.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSocialLogin = async (provider: any) => {
-    setError('');
-    setLoading(true);
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (err: any) {
-      console.error("Social auth error:", err.code, err.message);
-      switch (err.code) {
-        case 'auth/account-exists-with-different-credential':
-          setError('Já existe uma conta com este e-mail, mas usando um método de login diferente.');
-          break;
-        case 'auth/popup-closed-by-user':
-          setError('O login foi cancelado. Tente novamente.');
-          break;
-        case 'auth/cancelled-by-user':
-          setError('A operação foi cancelada pelo usuário.');
-          break;
-        case 'auth/popup-blocked':
-          setError('O pop-up de login foi bloqueado pelo navegador.');
-          break;
-        default:
-          setError('Ocorreu um erro ao autenticar com a rede social.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-brand-dark flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl p-8 shadow-2xl"
-      >
-          <div className="flex flex-col items-center text-center mb-8">
-            <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
-              <Bot className="w-8 h-8 text-brand-accent" />
-            </div>
-            <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">MUH ai</h2>
-            <p className="text-gray-400 text-sm">Entre ou crie uma conta para começar na sua assistente de IA</p>
-          </div>
-
-        <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">E-mail</label>
-            <input 
-              type="email" 
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white focus:ring-1 focus:ring-brand-accent focus:outline-none"
-              placeholder="seu@email.com"
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <div className="flex justify-between items-center">
-              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Senha</label>
-              {!isSignUp && (
-                <button 
-                  type="button" 
-                  onClick={handleForgotPassword}
-                  className="text-xs text-brand-accent hover:underline"
-                >
-                  Esqueceu a senha?
-                </button>
-              )}
-            </div>
-            <input 
-              type="password" 
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white focus:ring-1 focus:ring-brand-accent focus:outline-none"
-              placeholder="••••••••"
-              required
-            />
-          </div>
-          {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-              <p className="text-red-500 text-xs leading-relaxed">{error}</p>
-            </div>
-          )}
-          <button 
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : (isSignUp ? 'Criar Conta' : 'Entrar')}
-          </button>
-        </form>
-
-        <div className="relative mb-6">
-          <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-brand-border"></div></div>
-          <div className="relative flex justify-center text-xs uppercase"><span className="bg-brand-surface px-2 text-gray-500">Ou continue com</span></div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-6">
-          <button onClick={() => handleSocialLogin(googleProvider)} className="flex items-center justify-center gap-2 p-3 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 transition-all">
-            <Globe className="w-4 h-4 text-white" />
-            <span className="text-xs font-medium text-white">Google</span>
-          </button>
-          <button onClick={() => handleSocialLogin(facebookProvider)} className="flex items-center justify-center gap-2 p-3 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 transition-all">
-            <Facebook className="w-4 h-4 text-blue-500" />
-            <span className="text-xs font-medium text-white">Facebook</span>
-          </button>
-          <button onClick={() => handleSocialLogin(appleProvider)} className="flex items-center justify-center gap-2 p-3 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 transition-all">
-            <Apple className="w-4 h-4 text-white" />
-            <span className="text-xs font-medium text-white">Apple</span>
-          </button>
-          <button onClick={() => setIsSignUp(!isSignUp)} className="flex items-center justify-center gap-2 p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-xl hover:bg-brand-accent/20 transition-all">
-            <Mail className="w-4 h-4 text-brand-accent" />
-            <span className="text-xs font-medium text-brand-accent">{isSignUp ? 'Já tenho conta' : 'Criar conta'}</span>
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
+const saveData = (data: LocalData) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.error("Error saving data to localStorage", e);
+  }
+};
 
 // Memoized Message Item for performance
 const MessageItem = memo(({ message }: { message: Message }) => (
@@ -577,9 +229,7 @@ const ChatInput = memo(({
     }
 
     try {
-      console.log("Solicitando acesso ao microfone...");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log("Acesso concedido.");
       
       const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
         ? 'audio/webm' 
@@ -740,20 +390,10 @@ const ChatInput = memo(({
 
 ChatInput.displayName = 'ChatInput';
 
-export default function AppWrapper() {
-  return (
-    <ErrorBoundary>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </ErrorBoundary>
-  );
-}
-
 type View = 'chat' | 'about-bank';
 
 function App() {
-  const { user, nickname, loading: authLoading, setNickname } = useAuth();
+  const [nickname, setNickname] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<View>('chat');
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -768,67 +408,23 @@ function App() {
   const [tempNickname, setTempNickname] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Load data on initialization
   useEffect(() => {
-    if (user && nickname === null && !authLoading) {
+    const data = loadData();
+    setNickname(data.nickname);
+    setSessions(data.sessions);
+    setActiveSessionId(data.activeSessionId);
+    
+    if (!data.nickname) {
       setIsNicknameModalOpen(true);
-      // If it's a new user (nickname is null), show the about bank page after they set their nickname
-      // or just set it now to ensure they see it.
       setCurrentView('about-bank');
-    } else {
-      setIsNicknameModalOpen(false);
     }
-  }, [user, nickname, authLoading]);
+  }, []);
 
-  // Fetch sessions from Firestore
+  // Save data whenever it changes
   useEffect(() => {
-    if (!user) return;
-
-    const sessionsRef = collection(db, 'users', user.uid, 'sessions');
-    const q = query(sessionsRef, orderBy('updatedAt', 'desc'));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedSessions = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        updatedAt: (doc.data().updatedAt as Timestamp)?.toDate() || new Date(),
-        messages: [] // Messages are fetched separately
-      })) as ChatSession[];
-      
-      setSessions(fetchedSessions);
-      
-      if (fetchedSessions.length > 0 && !activeSessionId) {
-        setActiveSessionId(fetchedSessions[0].id);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/sessions`);
-    });
-
-    return unsubscribe;
-  }, [user]);
-
-  // Fetch messages for active session
-  useEffect(() => {
-    if (!user || !activeSessionId) return;
-
-    const messagesRef = collection(db, 'users', user.uid, 'sessions', activeSessionId, 'messages');
-    const q = query(messagesRef, orderBy('timestamp', 'asc'));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedMessages = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        timestamp: (doc.data().timestamp as Timestamp)?.toDate() || new Date()
-      })) as Message[];
-
-      setSessions(prev => prev.map(s => 
-        s.id === activeSessionId ? { ...s, messages: fetchedMessages } : s
-      ));
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/sessions/${activeSessionId}/messages`);
-    });
-
-    return unsubscribe;
-  }, [user, activeSessionId]);
+    saveData({ nickname, sessions, activeSessionId });
+  }, [nickname, sessions, activeSessionId]);
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const messages = activeSession?.messages || [];
@@ -854,52 +450,32 @@ function App() {
     }
   }, [messages, scrollToBottom]);
 
-  const createNewSession = useCallback(async () => {
-    if (!user) return;
-    try {
-      const sessionsRef = collection(db, 'users', user.uid, 'sessions');
-      const newSessionDoc = await addDoc(sessionsRef, {
-        title: 'Nova conversa',
-        updatedAt: serverTimestamp(),
-        userId: user.uid
-      });
-      setActiveSessionId(newSessionDoc.id);
-      setIsSidebarOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/sessions`);
-    }
-  }, [user]);
+  const createNewSession = useCallback(() => {
+    const newSession: ChatSession = {
+      id: Date.now().toString(),
+      title: 'Nova conversa',
+      messages: [],
+      updatedAt: new Date().toISOString()
+    };
+    setSessions(prev => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+    setIsSidebarOpen(false);
+  }, []);
 
-  const deleteSession = useCallback(async (id: string, e: React.MouseEvent) => {
+  const deleteSession = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!user) return;
-    try {
-      await deleteDoc(doc(db, 'users', user.uid, 'sessions', id));
-      if (activeSessionId === id) {
-        setActiveSessionId(sessions.find(s => s.id !== id)?.id || null);
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/sessions/${id}`);
+    setSessions(prev => prev.filter(s => s.id !== id));
+    if (activeSessionId === id) {
+      const remaining = sessions.filter(s => s.id !== id);
+      setActiveSessionId(remaining.length > 0 ? remaining[0].id : null);
     }
-  }, [user, activeSessionId, sessions]);
+  }, [activeSessionId, sessions]);
 
-  const clearAllSessions = useCallback(async () => {
-    if (!user) return;
-    try {
-      const batch = writeBatch(db);
-      const sessionsRef = collection(db, 'users', user.uid, 'sessions');
-      const snapshot = await getDocs(sessionsRef);
-      snapshot.docs.forEach((doc) => {
-        batch.delete(doc.ref);
-      });
-      await batch.commit();
-      setSessions([]);
-      setActiveSessionId(null);
-      setIsClearModalOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/sessions`);
-    }
-  }, [user]);
+  const clearAllSessions = useCallback(() => {
+    setSessions([]);
+    setActiveSessionId(null);
+    setIsClearModalOpen(false);
+  }, []);
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -914,36 +490,21 @@ function App() {
   };
 
   const handleSend = useCallback(async () => {
-    if ((!input.trim() && !selectedFile) || isLoading || !user) return;
+    if ((!input.trim() && !selectedFile) || isLoading) return;
 
-    // Ensure we have an active session
     let currentSessionId = activeSessionId;
-    if (!currentSessionId) {
-      try {
-        const sessionsRef = collection(db, 'users', user.uid, 'sessions');
-        const newSessionDoc = await addDoc(sessionsRef, {
-          title: input.trim().substring(0, 30) || 'Nova conversa',
-          updatedAt: serverTimestamp(),
-          userId: user.uid
-        });
-        currentSessionId = newSessionDoc.id;
-        setActiveSessionId(currentSessionId);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/sessions`);
-        return;
-      }
-    }
+    let newSessions = [...sessions];
 
-    // Check if API key is configured
-    if (!process.env.GEMINI_API_KEY) {
-      const errorMsg: Message = {
+    if (!currentSessionId) {
+      const newSession: ChatSession = {
         id: Date.now().toString(),
-        role: 'assistant',
-        content: "⚠️ **Configuração Necessária:** A chave de API não foi encontrada. Por favor, verifique as configurações do ambiente.",
-        timestamp: new Date(),
+        title: input.trim().substring(0, 30) || 'Nova conversa',
+        messages: [],
+        updatedAt: new Date().toISOString()
       };
-      // For local UI state only if needed, but we prefer syncing
-      return;
+      currentSessionId = newSession.id;
+      newSessions = [newSession, ...newSessions];
+      setActiveSessionId(currentSessionId);
     }
 
     let attachedImageUrl = "";
@@ -973,56 +534,45 @@ function App() {
 
     const userMessageContent = input.trim() || (selectedFile ? (selectedFile.type.startsWith('image/') ? "Analise esta imagem." : "Analise este áudio.") : "");
     
-    try {
-      const messagesRef = collection(db, 'users', user.uid, 'sessions', currentSessionId, 'messages');
-      await addDoc(messagesRef, {
-        role: 'user',
-        content: userMessageContent,
-        attachedImageUrl,
-        attachedAudioUrl,
-        timestamp: serverTimestamp()
-      });
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: userMessageContent,
+      attachedImageUrl,
+      attachedAudioUrl,
+      timestamp: new Date().toISOString()
+    };
 
-      // Update session title if it's the first message
-      if (messages.length === 0) {
-        const sessionRef = doc(db, 'users', user.uid, 'sessions', currentSessionId);
-        await setDoc(sessionRef, {
-          title: userMessageContent.substring(0, 40),
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      } else {
-        const sessionRef = doc(db, 'users', user.uid, 'sessions', currentSessionId);
-        await setDoc(sessionRef, {
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+    // Update sessions with user message
+    newSessions = newSessions.map(s => {
+      if (s.id === currentSessionId) {
+        const updatedMessages = [...s.messages, userMessage];
+        return {
+          ...s,
+          messages: updatedMessages,
+          title: s.messages.length === 0 ? userMessageContent.substring(0, 40) : s.title,
+          updatedAt: new Date().toISOString()
+        };
       }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/sessions/${currentSessionId}/messages`);
-    }
+      return s;
+    });
+    setSessions(newSessions);
 
     const currentInput = input.trim();
     setInput('');
     setSelectedFile(null);
-    
     setIsLoading(true);
 
     try {
-      let assistantContent = "";
-      const assistantMessageRef = await addDoc(collection(db, 'users', user.uid, 'sessions', currentSessionId, 'messages'), {
-        role: 'assistant',
-        content: '',
-        timestamp: serverTimestamp()
-      });
-
-      // Prepare history from the current state of the session
-      const filteredMessages = messages.filter(m => m.content && m.content.trim() !== "");
+      const activeSess = newSessions.find(s => s.id === currentSessionId);
+      const historyMessages = activeSess?.messages || [];
       
-      // Ensure history starts with 'user' and alternates roles
-      let history: any[] = [];
+      // Prepare history for Gemini
+      const history: any[] = [];
       let lastRole: string | null = null;
       
       // Take last 10 messages and filter for alternating roles starting with user
-      const recentMessages = filteredMessages.slice(-10);
+      const recentMessages = historyMessages.slice(-10);
       for (const m of recentMessages) {
         const role = m.role === 'assistant' ? 'model' : 'user';
         if (history.length === 0 && role !== 'user') continue;
@@ -1045,46 +595,50 @@ function App() {
         currentParts.push(filePart);
       }
 
-      // Retry logic for transient errors
-      let retryCount = 0;
-      const maxRetries = 2;
-      let success = false;
-
-      while (retryCount <= maxRetries && !success) {
-        try {
-          const response = await genAI.models.generateContentStream({
-            model: "gemini-3-flash-preview",
-            contents: [
-              ...history,
-              { role: 'user', parts: currentParts }
-            ],
-            config: {
-              systemInstruction: `Você é a MUH ai, uma assistente virtual inteligente e inovadora. O nome do usuário é ${nickname || user.displayName || 'Utilizador'}. Trate-o de forma amigável, profissional e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
-            }
-          });
-
-          for await (const chunk of response) {
-            if (chunk.candidates?.[0]?.finishReason === 'SAFETY' || chunk.candidates?.[0]?.finishReason === 'OTHER') {
-              assistantContent += "\n\n⚠️ *[Resposta interrompida por filtros de segurança ou erro técnico]*";
-              break;
-            }
-
-            const chunkText = chunk.text || "";
-            if (!chunkText) continue;
-            assistantContent += chunkText;
-            
-            // Update assistant message in Firestore
-            await setDoc(assistantMessageRef, {
-              content: assistantContent
-            }, { merge: true });
-          }
-          success = true;
-        } catch (error: any) {
-          console.error(`Attempt ${retryCount + 1} failed:`, error);
-          retryCount++;
-          if (retryCount > maxRetries) throw error;
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      const response = await genAI.models.generateContentStream({
+        model: "gemini-3-flash-preview",
+        contents: [
+          ...history,
+          { role: 'user', parts: currentParts }
+        ],
+        config: {
+          systemInstruction: `Você é a MUH ai, uma assistente virtual inteligente e inovadora. O nome do usuário é ${nickname || 'Utilizador'}. Trate-o de forma amigável, profissional e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
         }
+      });
+
+      let assistantContent = "";
+      const assistantMessageId = (Date.now() + 1).toString();
+
+      for await (const chunk of response) {
+        if (chunk.candidates?.[0]?.finishReason === 'SAFETY' || chunk.candidates?.[0]?.finishReason === 'OTHER') {
+          assistantContent += "\n\n⚠️ *[Resposta interrompida por filtros de segurança ou erro técnico]*";
+          break;
+        }
+
+        const chunkText = chunk.text || "";
+        if (!chunkText) continue;
+        assistantContent += chunkText;
+        
+        // Update assistant message in state
+        setSessions(prev => prev.map(s => {
+          if (s.id === currentSessionId) {
+            const existingMsgIndex = s.messages.findIndex(m => m.id === assistantMessageId);
+            let updatedMessages;
+            if (existingMsgIndex >= 0) {
+              updatedMessages = [...s.messages];
+              updatedMessages[existingMsgIndex] = { ...updatedMessages[existingMsgIndex], content: assistantContent };
+            } else {
+              updatedMessages = [...s.messages, {
+                id: assistantMessageId,
+                role: 'assistant',
+                content: assistantContent,
+                timestamp: new Date().toISOString()
+              }];
+            }
+            return { ...s, messages: updatedMessages };
+          }
+          return s;
+        }));
       }
     } catch (error: any) {
       console.error("Error calling Gemini API:", error);
@@ -1096,30 +650,65 @@ function App() {
         errorMessage = "⚠️ **Limite Atingido:** O limite de uso da API foi excedido.";
       }
 
-      try {
-        await addDoc(collection(db, 'users', user.uid, 'sessions', currentSessionId, 'messages'), {
-          role: 'assistant',
-          content: errorMessage,
-          timestamp: serverTimestamp()
-        });
-      } catch (e) {
-        console.error("Error saving error message:", e);
-      }
+      const errorMsg: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: errorMessage,
+        timestamp: new Date().toISOString()
+      };
+
+      setSessions(prev => prev.map(s => {
+        if (s.id === currentSessionId) {
+          return { ...s, messages: [...s.messages, errorMsg] };
+        }
+        return s;
+      }));
     } finally {
       setIsLoading(false);
     }
-  }, [input, selectedFile, isLoading, activeSessionId, sessions, messages, user]);
+  }, [input, selectedFile, isLoading, activeSessionId, sessions, nickname]);
 
-  if (authLoading) {
+  const handleClearData = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    window.location.reload();
+  };
+
+  if (isNicknameModalOpen) {
     return (
-      <div className="h-screen bg-brand-dark flex items-center justify-center">
-        <Loader2 className="w-12 h-12 text-brand-accent animate-spin" />
+      <div className="fixed inset-0 bg-brand-dark/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-brand-surface border border-brand-border p-8 rounded-2xl max-w-sm w-full shadow-2xl"
+        >
+          <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-6 mx-auto border border-brand-accent/20">
+            <User className="w-8 h-8 text-brand-accent" />
+          </div>
+          <h3 className="text-xl font-bold text-white mb-2 text-center">Como devemos chamar você?</h3>
+          <p className="text-gray-400 text-sm mb-6 text-center">Personalize sua experiência com a MUH ai.</p>
+          <input 
+            type="text" 
+            value={tempNickname}
+            onChange={(e) => setTempNickname(e.target.value)}
+            placeholder="Seu apelido"
+            className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white mb-4 focus:ring-1 focus:ring-brand-accent focus:outline-none"
+            autoFocus
+          />
+          <button 
+            onClick={() => {
+              if (tempNickname.trim()) {
+                setNickname(tempNickname.trim());
+                setIsNicknameModalOpen(false);
+              }
+            }}
+            disabled={!tempNickname.trim()}
+            className="w-full py-3 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all disabled:opacity-50"
+          >
+            Começar
+          </button>
+        </motion.div>
       </div>
     );
-  }
-
-  if (!user) {
-    return <Login />;
   }
 
   return (
@@ -1143,7 +732,6 @@ function App() {
       } ${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-72'} w-72`}>
         <div className="flex flex-col h-full p-4 relative">
           <div className={`flex items-center mb-6 ${isSidebarCollapsed ? 'lg:justify-center' : 'justify-between'}`}>
-            {/* Collapse Toggle Arrow at Top Left */}
             <button 
               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
               className="hidden lg:flex p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all"
@@ -1250,25 +838,21 @@ function App() {
             )}
           </div>
 
-            <div className="pt-4 border-t border-brand-border mt-4">
+          <div className="pt-4 border-t border-brand-border mt-4">
             <div className={`flex items-center gap-3 p-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
               <div className="w-8 h-8 rounded-full bg-brand-accent/20 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt="User" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                ) : (
-                  <User className="w-4 h-4 text-brand-accent" />
-                )}
+                <User className="w-4 h-4 text-brand-accent" />
               </div>
               {!isSidebarCollapsed && (
                 <>
                   <div className="flex-1 overflow-hidden">
-                    <p className="text-xs font-medium truncate">{nickname || user.displayName || user.email?.split('@')[0] || 'Utilizador'}</p>
-                    <p className="text-[10px] text-gray-500">Plano Grátis</p>
+                    <p className="text-xs font-medium truncate">{nickname || 'Utilizador'}</p>
+                    <p className="text-[10px] text-gray-500">Local Storage</p>
                   </div>
                   <button 
-                    onClick={() => signOut(auth)}
+                    onClick={handleClearData}
                     className="p-1.5 hover:bg-white/5 rounded-lg text-gray-600 hover:text-white transition-colors"
-                    title="Sair"
+                    title="Limpar Dados"
                   >
                     <LogOut className="w-3.5 h-3.5" />
                   </button>
@@ -1278,59 +862,6 @@ function App() {
           </div>
         </div>
       </aside>
-
-      {/* Nickname Modal */}
-      <AnimatePresence>
-        {isNicknameModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-md"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-sm bg-brand-surface border border-brand-border rounded-2xl p-8 shadow-2xl"
-            >
-              <div className="flex flex-col items-center text-center mb-8">
-                <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
-                  <Sparkles className="w-8 h-8 text-brand-accent" />
-                </div>
-                <h3 className="text-2xl font-bold text-white mb-2 tracking-tight">Como quer ser chamado?</h3>
-                <p className="text-gray-400 text-sm">Personalize sua experiência na MUH ai escolhendo um apelido.</p>
-              </div>
-              
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Seu Apelido</label>
-                  <input 
-                    type="text" 
-                    value={tempNickname}
-                    onChange={(e) => setTempNickname(e.target.value)}
-                    className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white focus:ring-1 focus:ring-brand-accent focus:outline-none"
-                    placeholder="Ex: Alex"
-                    autoFocus
-                  />
-                </div>
-                <button 
-                  onClick={() => {
-                    if (tempNickname.trim().length >= 2) {
-                      setNickname(tempNickname.trim());
-                    }
-                  }}
-                  disabled={tempNickname.trim().length < 2}
-                  className="w-full py-3 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all shadow-[0_0_20px_rgba(168,85,247,0.3)] disabled:opacity-50"
-                >
-                  Confirmar
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Clear History Confirmation Modal */}
       <AnimatePresence>
@@ -1485,7 +1016,7 @@ function App() {
                     animate={{ opacity: 1, y: 0 }}
                     className="text-4xl font-semibold text-white mb-12 tracking-tight"
                   >
-                    {greeting}, {nickname || user.displayName?.split(' ')[0] || user.email?.split('@')[0] || 'Utilizador'}!
+                    {greeting}, {nickname || 'Utilizador'}!
                   </motion.h2>
                   
                   <div className="w-full max-w-2xl">
@@ -1501,10 +1032,10 @@ function App() {
                     
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
                       {[
-                        { icon: "💰", label: "Saldo e Extrato" },
-                        { icon: "💳", label: "Meus Cartões" },
-                        { icon: "📈", label: "Investimentos" },
-                        { icon: "🛡️", label: "Seguros" }
+                        { icon: "🧠", label: "Ideias Criativas" },
+                        { icon: "📝", label: "Resumo de Texto" },
+                        { icon: "💻", label: "Ajuda com Código" },
+                        { icon: "🎨", label: "Dicas de Design" }
                       ].map((item) => (
                         <button
                           key={item.label}
@@ -1525,34 +1056,42 @@ function App() {
                       <MessageItem key={message.id} message={message} />
                     ))}
                   </AnimatePresence>
+                  <div ref={messagesEndRef} />
                 </div>
               )}
-              <div ref={messagesEndRef} />
             </div>
           )}
         </main>
 
-        {/* Persistent Input Area (only when chatting) */}
-        {messages.length > 0 && (
-          <div className={`fixed bottom-0 left-0 right-0 ${isSidebarCollapsed ? 'lg:left-20' : 'lg:left-72'} bg-gradient-to-t from-brand-dark via-brand-dark to-transparent pt-12 pb-6 px-4 transition-all duration-300`}>
+        {/* Input Area (Sticky at bottom) */}
+        {messages.length > 0 && currentView === 'chat' && (
+          <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-brand-dark via-brand-dark to-transparent pt-20">
             <div className="max-w-3xl mx-auto">
-                <ChatInput 
-                  input={input}
-                  setInput={setInput}
-                  handleSend={handleSend}
-                  isLoading={isLoading}
-                  placeholder="Responda à MUH ai..."
-                  selectedFile={selectedFile}
-                  setSelectedFile={setSelectedFile}
-                  isSmall={true}
-                />
-                <p className="text-[10px] text-center text-gray-600 mt-3 font-medium">
-                  A MUH ai pode cometer erros. Considere verificar informações importantes.
-                </p>
+              <ChatInput 
+                input={input}
+                setInput={setInput}
+                handleSend={handleSend}
+                isLoading={isLoading}
+                placeholder="Digite sua mensagem..."
+                selectedFile={selectedFile}
+                setSelectedFile={setSelectedFile}
+                isSmall
+              />
+              <p className="text-[10px] text-center text-gray-600 mt-3 tracking-wider uppercase">
+                MUH ai pode cometer erros. Verifique informações importantes.
+              </p>
             </div>
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+export default function AppWrapper() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   );
 }
