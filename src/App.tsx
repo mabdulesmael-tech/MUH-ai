@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, Component, ErrorInfo, ReactNode, memo, lazy, Suspense, useCallback, createContext, useContext } from 'react';
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2, Menu, X, MessageSquare, History, LogOut, Mail, Github, Facebook, Apple } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Trash2, Plus, Paperclip, ChevronDown, Globe, Mic, Square, Volume2, Menu, X, MessageSquare, History, LogOut, Mail, Github, Facebook, Apple, AlertCircle } from 'lucide-react';
 import { 
   signInWithPopup, 
   onAuthStateChanged, 
@@ -234,7 +234,38 @@ function Login() {
         await signInWithEmailAndPassword(auth, email, password);
       }
     } catch (err: any) {
-      setError(err.message);
+      console.error("Auth error:", err.code, err.message);
+      switch (err.code) {
+        case 'auth/email-already-in-use':
+          setError('Este e-mail já está em uso. Tente fazer login em vez de criar uma conta.');
+          break;
+        case 'auth/invalid-email':
+          setError('O endereço de e-mail não é válido.');
+          break;
+        case 'auth/operation-not-allowed':
+          setError('A operação não é permitida.');
+          break;
+        case 'auth/weak-password':
+          setError('A senha é muito fraca. Use pelo menos 6 caracteres.');
+          break;
+        case 'auth/user-disabled':
+          setError('Esta conta de usuário foi desativada.');
+          break;
+        case 'auth/user-not-found':
+          setError('Usuário não encontrado. Verifique o e-mail ou crie uma conta.');
+          break;
+        case 'auth/wrong-password':
+          setError('Senha incorreta. Tente novamente.');
+          break;
+        case 'auth/invalid-credential':
+          setError('Credenciais inválidas. Verifique seu e-mail e senha.');
+          break;
+        case 'auth/too-many-requests':
+          setError('Muitas tentativas malsucedidas. Tente novamente mais tarde.');
+          break;
+        default:
+          setError('Ocorreu um erro ao autenticar. Por favor, tente novamente.');
+      }
     } finally {
       setLoading(false);
     }
@@ -246,7 +277,23 @@ function Login() {
     try {
       await signInWithPopup(auth, provider);
     } catch (err: any) {
-      setError(err.message);
+      console.error("Social auth error:", err.code, err.message);
+      switch (err.code) {
+        case 'auth/account-exists-with-different-credential':
+          setError('Já existe uma conta com este e-mail, mas usando um método de login diferente.');
+          break;
+        case 'auth/popup-closed-by-user':
+          setError('O login foi cancelado. Tente novamente.');
+          break;
+        case 'auth/cancelled-by-user':
+          setError('A operação foi cancelada pelo usuário.');
+          break;
+        case 'auth/popup-blocked':
+          setError('O pop-up de login foi bloqueado pelo navegador.');
+          break;
+        default:
+          setError('Ocorreu um erro ao autenticar com a rede social.');
+      }
     } finally {
       setLoading(false);
     }
@@ -290,7 +337,12 @@ function Login() {
               required
             />
           </div>
-          {error && <p className="text-red-500 text-xs">{error}</p>}
+          {error && (
+            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+              <p className="text-red-500 text-xs leading-relaxed">{error}</p>
+            </div>
+          )}
           <button 
             type="submit"
             disabled={loading}
