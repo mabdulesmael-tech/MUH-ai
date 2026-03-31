@@ -358,8 +358,8 @@ function Login() {
             <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
               <Bot className="w-8 h-8 text-brand-accent" />
             </div>
-            <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">MUH Bank</h2>
-            <p className="text-gray-400 text-sm">Entre ou crie uma conta para começar no seu banco digital</p>
+            <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">MUH ai</h2>
+            <p className="text-gray-400 text-sm">Entre ou crie uma conta para começar na sua assistente de IA</p>
           </div>
 
         <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
@@ -1059,7 +1059,7 @@ function App() {
               { role: 'user', parts: currentParts }
             ],
             config: {
-              systemInstruction: `Você é a assistente virtual do MUH Bank, um banco digital inovador. O nome do usuário é ${nickname || user.displayName || 'Utilizador'}. Trate-o de forma amigável, profissional e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
+              systemInstruction: `Você é a MUH ai, uma assistente virtual inteligente e inovadora. O nome do usuário é ${nickname || user.displayName || 'Utilizador'}. Trate-o de forma amigável, profissional e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
             }
           });
 
@@ -1158,8 +1158,8 @@ function App() {
                   <Bot className="w-4 h-4 text-brand-accent" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH BANK</span>
-                  <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Digital</span>
+                  <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH AI</span>
+                  <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Inteligência</span>
                 </div>
               </div>
             )}
@@ -1189,7 +1189,7 @@ function App() {
               } ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
             >
               <Globe className="w-5 h-5 flex-shrink-0" />
-              {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Sobre o Banco</span>}
+              {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Sobre a MUH ai</span>}
             </button>
           </div>
 
@@ -1391,8 +1391,8 @@ function App() {
                 <Bot className="w-5 h-5 text-brand-accent" />
               </div>
               <div className="flex flex-col items-start">
-                <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH BANK</span>
-                <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Digital</span>
+                <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH AI</span>
+                <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Inteligência</span>
               </div>
             </div>
           </div>
@@ -1417,15 +1417,15 @@ function App() {
                 className="space-y-12"
               >
                 <div className="text-center space-y-4">
-                  <h1 className="text-5xl font-bold text-white tracking-tight">Bem-vindo ao <span className="text-brand-accent">MUH Bank</span></h1>
-                  <p className="text-xl text-gray-400 max-w-2xl mx-auto">O futuro das finanças digitais, potencializado por inteligência artificial avançada.</p>
+                  <h1 className="text-5xl font-bold text-white tracking-tight">Bem-vindo à <span className="text-brand-accent">MUH ai</span></h1>
+                  <p className="text-xl text-gray-400 max-w-2xl mx-auto">Sua assistente pessoal inteligente, potencializada por IA de última geração.</p>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {[
-                    { title: "Segurança Total", desc: "Criptografia de ponta a ponta e autenticação biométrica para proteger seu patrimônio.", icon: "🛡️" },
-                    { title: "IA Financeira", desc: "Nossa IA analisa seus gastos e sugere as melhores formas de investir e economizar.", icon: "🤖" },
-                    { title: "Taxa Zero", desc: "Aproveite transferências, pagamentos e manutenção de conta sem custos escondidos.", icon: "💎" }
+                    { title: "Inteligência Pura", desc: "Processamento de linguagem natural avançado para entender e resolver suas dúvidas.", icon: "🧠" },
+                    { title: "Produtividade", desc: "Crie textos, analise dados e organize sua rotina com ajuda da nossa IA.", icon: "⚡" },
+                    { title: "Sempre Disponível", desc: "Suporte 24/7 para ajudar você em qualquer tarefa, a qualquer momento.", icon: "✨" }
                   ].map((feature, i) => (
                     <div key={i} className="p-6 bg-brand-surface border border-brand-border rounded-2xl hover:border-brand-accent/30 transition-all group">
                       <div className="text-3xl mb-4 group-hover:scale-110 transition-transform">{feature.icon}</div>
@@ -1440,11 +1440,11 @@ function App() {
                     <div className="space-y-6">
                       <h2 className="text-3xl font-bold text-white">Nossa Missão</h2>
                       <p className="text-gray-400 leading-relaxed">
-                        No MUH Bank, acreditamos que o acesso a serviços financeiros de qualidade deve ser simples, transparente e acessível a todos. 
-                        Combinamos tecnologia de ponta com um atendimento humanizado para criar a melhor experiência bancária do mundo.
+                        Na MUH ai, acreditamos que a inteligência artificial deve ser uma ferramenta de empoderamento humano. 
+                        Nossa missão é democratizar o acesso à tecnologia de ponta, tornando a vida das pessoas mais simples e produtiva.
                       </p>
                       <ul className="space-y-3">
-                        {["Transparência radical", "Inovação constante", "Foco no cliente"].map((item, i) => (
+                        {["Inovação ética", "Foco na experiência", "Privacidade total"].map((item, i) => (
                           <li key={i} className="flex items-center gap-3 text-sm text-gray-300">
                             <Sparkles className="w-4 h-4 text-brand-accent" />
                             {item}
@@ -1454,8 +1454,8 @@ function App() {
                     </div>
                     <div className="relative aspect-video bg-brand-dark rounded-2xl border border-brand-border overflow-hidden shadow-2xl">
                       <img 
-                        src="https://picsum.photos/seed/bank/800/600" 
-                        alt="MUH Bank Office" 
+                        src="https://picsum.photos/seed/ai-tech/800/600" 
+                        alt="MUH ai Technology" 
                         className="object-cover w-full h-full opacity-60"
                         referrerPolicy="no-referrer"
                       />
@@ -1494,7 +1494,7 @@ function App() {
                       setInput={setInput}
                       handleSend={handleSend}
                       isLoading={isLoading}
-                      placeholder="Como o MUH Bank pode ajudar hoje?"
+                      placeholder="Como a MUH ai pode ajudar hoje?"
                       selectedFile={selectedFile}
                       setSelectedFile={setSelectedFile}
                     />
@@ -1541,13 +1541,13 @@ function App() {
                   setInput={setInput}
                   handleSend={handleSend}
                   isLoading={isLoading}
-                  placeholder="Responda ao MUH Bank..."
+                  placeholder="Responda à MUH ai..."
                   selectedFile={selectedFile}
                   setSelectedFile={setSelectedFile}
                   isSmall={true}
                 />
                 <p className="text-[10px] text-center text-gray-600 mt-3 font-medium">
-                  O MUH Bank ai pode cometer erros. Considere verificar informações importantes.
+                  A MUH ai pode cometer erros. Considere verificar informações importantes.
                 </p>
             </div>
           </div>
