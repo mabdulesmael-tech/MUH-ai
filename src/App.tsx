@@ -42,8 +42,15 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 }
 
 // Initialize Gemini API
-const apiKey = process.env.GEMINI_API_KEY || "";
-const genAI = new GoogleGenAI({ apiKey });
+const getGenAI = () => {
+  const apiKey = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || 
+                 (import.meta.env?.VITE_GEMINI_API_KEY) || 
+                 "";
+  if (!apiKey) {
+    console.warn("GEMINI_API_KEY not found in environment.");
+  }
+  return new GoogleGenAI({ apiKey });
+};
 
 interface Message {
   id: string;
@@ -131,7 +138,7 @@ const MessageItem = memo(({ message }: { message: Message }) => (
         )}
         <div className="markdown-body">
           <Suspense fallback={<div className="animate-pulse h-4 bg-white/5 rounded w-3/4 mb-2"></div>}>
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+            <ReactMarkdown>{message.content || ""}</ReactMarkdown>
           </Suspense>
         </div>
         {message.imageUrl && (
@@ -564,16 +571,25 @@ function App() {
     setIsLoading(true);
 
     try {
+      const apiKey = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || 
+                     (import.meta.env?.VITE_GEMINI_API_KEY);
+      
+      if (!apiKey) {
+        throw new Error("API_KEY_MISSING");
+      }
+
+      const genAI = getGenAI();
       const activeSess = newSessions.find(s => s.id === currentSessionId);
       const historyMessages = activeSess?.messages || [];
       
-      // Prepare history for Gemini
+      // Prepare history for Gemini (excluding the current user message)
       const history: any[] = [];
       let lastRole: string | null = null;
       
-      // Take last 10 messages and filter for alternating roles starting with user
-      const recentMessages = historyMessages.slice(-10);
-      for (const m of recentMessages) {
+      // Filter for alternating roles starting with user
+      // We exclude the last message because it's the current user message
+      const historyToProcess = historyMessages.slice(0, -1).slice(-10);
+      for (const m of historyToProcess) {
         const role = m.role === 'assistant' ? 'model' : 'user';
         if (history.length === 0 && role !== 'user') continue;
         if (role === lastRole) continue;
@@ -642,12 +658,17 @@ function App() {
       }
     } catch (error: any) {
       console.error("Error calling Gemini API:", error);
-      let errorMessage = "Desculpe, ocorreu um erro ao processar sua solicitação. Por favor, tente novamente.";
       
-      if (error?.message?.includes("API key not valid")) {
-        errorMessage = "⚠️ **Chave de API Inválida:** A chave de API configurada não é válida.";
-      } else if (error?.message?.includes("Quota exceeded")) {
-        errorMessage = "⚠️ **Limite Atingido:** O limite de uso da API foi excedido.";
+      let errorMessage = `Desculpe, ocorreu um erro ao processar sua solicitação: ${error?.message || 'Erro desconhecido'}. Por favor, tente novamente.`;
+      
+      if (error?.message === "API_KEY_MISSING") {
+        errorMessage = "⚠️ **Configuração Necessária:** A chave de API não foi encontrada. Por favor, adicione sua GEMINI_API_KEY nas configurações do AI Studio (ícone de engrenagem > Environment Variables).";
+      } else if (error?.message?.includes("API key not valid")) {
+        errorMessage = "⚠️ **Chave de API Inválida:** A chave de API configurada não é válida. Por favor, gere uma nova chave no Google AI Studio.";
+      } else if (error?.message?.includes("Quota exceeded") || error?.message?.includes("429")) {
+        errorMessage = "⚠️ **Limite Atingido:** O limite de uso da API foi excedido ou você está enviando muitas mensagens seguidas. Tente novamente em alguns segundos.";
+      } else if (error?.message?.includes("Safety") || error?.message?.includes("blocked")) {
+        errorMessage = "⚠️ **Conteúdo Bloqueado:** A solicitação foi bloqueada pelos filtros de segurança da IA.";
       }
 
       const errorMsg: Message = {
