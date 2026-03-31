@@ -9,7 +9,8 @@ import {
   User as FirebaseUser,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  updateProfile
+  updateProfile,
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { 
   collection, 
@@ -156,35 +157,53 @@ interface ChatSession {
 // Auth Context
 const AuthContext = createContext<{
   user: FirebaseUser | null;
+  nickname: string | null;
   loading: boolean;
+  setNickname: (name: string) => Promise<void>;
 } | undefined>(undefined);
 
 function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [nickname, setNicknameState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const setNickname = async (name: string) => {
+    if (!user) return;
+    const userRef = doc(db, 'users', user.uid);
+    try {
+      await setDoc(userRef, { nickname: name }, { merge: true });
+      setNicknameState(name);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
-      setLoading(false);
       
       if (user) {
-        // Sync user to Firestore
+        // Sync user to Firestore and get nickname
         const userRef = doc(db, 'users', user.uid);
         getDoc(userRef).then((docSnap) => {
           if (!docSnap.exists()) {
             // Create new user
-            setDoc(userRef, {
+            const newUser = {
               uid: user.uid,
               displayName: user.displayName,
+              nickname: null, // Initial nickname is null
               email: user.email,
               photoURL: user.photoURL,
               createdAt: serverTimestamp(),
               role: 'user'
-            }).catch(err => handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}`));
+            };
+            setDoc(userRef, newUser).catch(err => handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}`));
+            setNicknameState(null);
           } else {
-            // Update existing user only if info changed
             const data = docSnap.data();
+            setNicknameState(data.nickname || null);
+            
+            // Update existing user only if info changed (except nickname)
             const updates: any = {};
             if (data.displayName !== user.displayName) updates.displayName = user.displayName;
             if (data.photoURL !== user.photoURL) updates.photoURL = user.photoURL;
@@ -194,14 +213,21 @@ function AuthProvider({ children }: { children: ReactNode }) {
                 .catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`));
             }
           }
-        }).catch(err => handleFirestoreError(err, OperationType.GET, `users/${user.uid}`));
+          setLoading(false);
+        }).catch(err => {
+          handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
+          setLoading(false);
+        });
+      } else {
+        setNicknameState(null);
+        setLoading(false);
       }
     });
     return unsubscribe;
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading }}>
+    <AuthContext.Provider value={{ user, nickname, loading, setNickname }}>
       {children}
     </AuthContext.Provider>
   );
@@ -230,6 +256,9 @@ function Login() {
     try {
       if (isSignUp) {
         await createUserWithEmailAndPassword(auth, email, password);
+        // After successful sign up, the AuthProvider will update the user state
+        // and the App component will render. We don't need to navigate here
+        // as the conditional rendering in AppWrapper handles it.
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
@@ -237,7 +266,8 @@ function Login() {
       console.error("Auth error:", err.code, err.message);
       switch (err.code) {
         case 'auth/email-already-in-use':
-          setError('Este e-mail já está em uso. Tente fazer login em vez de criar uma conta.');
+          setError('Este e-mail já está em uso. Mudamos para o modo de login para você.');
+          setIsSignUp(false);
           break;
         case 'auth/invalid-email':
           setError('O endereço de e-mail não é válido.');
@@ -266,6 +296,24 @@ function Login() {
         default:
           setError('Ocorreu um erro ao autenticar. Por favor, tente novamente.');
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setError('Por favor, insira seu e-mail para redefinir a senha.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setError('E-mail de redefinição de senha enviado! Verifique sua caixa de entrada.');
+    } catch (err: any) {
+      console.error("Password reset error:", err.code, err.message);
+      setError('Erro ao enviar e-mail de redefinição. Verifique se o e-mail está correto.');
     } finally {
       setLoading(false);
     }
@@ -306,13 +354,13 @@ function Login() {
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md bg-brand-surface border border-brand-border rounded-2xl p-8 shadow-2xl"
       >
-        <div className="flex flex-col items-center text-center mb-8">
-          <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
-            <Bot className="w-8 h-8 text-brand-accent" />
+          <div className="flex flex-col items-center text-center mb-8">
+            <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
+              <Bot className="w-8 h-8 text-brand-accent" />
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">MUH Bank</h2>
+            <p className="text-gray-400 text-sm">Entre ou crie uma conta para começar no seu banco digital</p>
           </div>
-          <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">MUH ai</h2>
-          <p className="text-gray-400 text-sm">Entre ou crie uma conta para começar</p>
-        </div>
 
         <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
           <div className="space-y-2">
@@ -327,7 +375,18 @@ function Login() {
             />
           </div>
           <div className="space-y-2">
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Senha</label>
+            <div className="flex justify-between items-center">
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Senha</label>
+              {!isSignUp && (
+                <button 
+                  type="button" 
+                  onClick={handleForgotPassword}
+                  className="text-xs text-brand-accent hover:underline"
+                >
+                  Esqueceu a senha?
+                </button>
+              )}
+            </div>
             <input 
               type="password" 
               value={password}
@@ -691,8 +750,11 @@ export default function AppWrapper() {
   );
 }
 
+type View = 'chat' | 'about-bank';
+
 function App() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, nickname, loading: authLoading, setNickname } = useAuth();
+  const [currentView, setCurrentView] = useState<View>('chat');
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -702,7 +764,20 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+  const [isNicknameModalOpen, setIsNicknameModalOpen] = useState(false);
+  const [tempNickname, setTempNickname] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (user && nickname === null && !authLoading) {
+      setIsNicknameModalOpen(true);
+      // If it's a new user (nickname is null), show the about bank page after they set their nickname
+      // or just set it now to ensure they see it.
+      setCurrentView('about-bank');
+    } else {
+      setIsNicknameModalOpen(false);
+    }
+  }, [user, nickname, authLoading]);
 
   // Fetch sessions from Firestore
   useEffect(() => {
@@ -984,7 +1059,7 @@ function App() {
               { role: 'user', parts: currentParts }
             ],
             config: {
-              systemInstruction: `Você é a MUH ai, uma IA rápida e eficiente. O nome do usuário é ${user.displayName || 'Utilizador'}. Trate-o de forma amigável e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
+              systemInstruction: `Você é a assistente virtual do MUH Bank, um banco digital inovador. O nome do usuário é ${nickname || user.displayName || 'Utilizador'}. Trate-o de forma amigável, profissional e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
             }
           });
 
@@ -1083,11 +1158,39 @@ function App() {
                   <Bot className="w-4 h-4 text-brand-accent" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH AI</span>
-                  <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Online</span>
+                  <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH BANK</span>
+                  <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Digital</span>
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="space-y-2 mb-6">
+            <button 
+              onClick={() => {
+                setCurrentView('chat');
+                setIsSidebarOpen(false);
+              }}
+              className={`flex items-center gap-3 w-full p-3 rounded-xl transition-all group ${
+                currentView === 'chat' ? 'bg-brand-accent/10 border border-brand-accent/20 text-white' : 'hover:bg-white/5 border border-transparent text-gray-400'
+              } ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
+            >
+              <MessageSquare className="w-5 h-5 flex-shrink-0" />
+              {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Chat Assistant</span>}
+            </button>
+
+            <button 
+              onClick={() => {
+                setCurrentView('about-bank');
+                setIsSidebarOpen(false);
+              }}
+              className={`flex items-center gap-3 w-full p-3 rounded-xl transition-all group ${
+                currentView === 'about-bank' ? 'bg-brand-accent/10 border border-brand-accent/20 text-white' : 'hover:bg-white/5 border border-transparent text-gray-400'
+              } ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
+            >
+              <Globe className="w-5 h-5 flex-shrink-0" />
+              {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Sobre o Banco</span>}
+            </button>
           </div>
 
           <button 
@@ -1147,7 +1250,7 @@ function App() {
             )}
           </div>
 
-          <div className="pt-4 border-t border-brand-border mt-4">
+            <div className="pt-4 border-t border-brand-border mt-4">
             <div className={`flex items-center gap-3 p-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
               <div className="w-8 h-8 rounded-full bg-brand-accent/20 flex items-center justify-center flex-shrink-0 overflow-hidden">
                 {user.photoURL ? (
@@ -1159,7 +1262,7 @@ function App() {
               {!isSidebarCollapsed && (
                 <>
                   <div className="flex-1 overflow-hidden">
-                    <p className="text-xs font-medium truncate">{user.displayName || user.email?.split('@')[0] || 'Utilizador'}</p>
+                    <p className="text-xs font-medium truncate">{nickname || user.displayName || user.email?.split('@')[0] || 'Utilizador'}</p>
                     <p className="text-[10px] text-gray-500">Plano Grátis</p>
                   </div>
                   <button 
@@ -1176,7 +1279,58 @@ function App() {
         </div>
       </aside>
 
-      {/* Name Modal removed as we use Auth */}
+      {/* Nickname Modal */}
+      <AnimatePresence>
+        {isNicknameModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-sm bg-brand-surface border border-brand-border rounded-2xl p-8 shadow-2xl"
+            >
+              <div className="flex flex-col items-center text-center mb-8">
+                <div className="w-16 h-16 bg-brand-accent/10 rounded-2xl flex items-center justify-center mb-4 border border-brand-accent/20">
+                  <Sparkles className="w-8 h-8 text-brand-accent" />
+                </div>
+                <h3 className="text-2xl font-bold text-white mb-2 tracking-tight">Como quer ser chamado?</h3>
+                <p className="text-gray-400 text-sm">Personalize sua experiência na MUH ai escolhendo um apelido.</p>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Seu Apelido</label>
+                  <input 
+                    type="text" 
+                    value={tempNickname}
+                    onChange={(e) => setTempNickname(e.target.value)}
+                    className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white focus:ring-1 focus:ring-brand-accent focus:outline-none"
+                    placeholder="Ex: Alex"
+                    autoFocus
+                  />
+                </div>
+                <button 
+                  onClick={() => {
+                    if (tempNickname.trim().length >= 2) {
+                      setNickname(tempNickname.trim());
+                    }
+                  }}
+                  disabled={tempNickname.trim().length < 2}
+                  className="w-full py-3 bg-brand-accent text-white font-bold rounded-xl hover:bg-brand-accent/80 transition-all shadow-[0_0_20px_rgba(168,85,247,0.3)] disabled:opacity-50"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Clear History Confirmation Modal */}
       <AnimatePresence>
@@ -1237,8 +1391,8 @@ function App() {
                 <Bot className="w-5 h-5 text-brand-accent" />
               </div>
               <div className="flex flex-col items-start">
-                <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH AI</span>
-                <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Online</span>
+                <span className="text-[10px] font-bold text-white uppercase tracking-[0.2em] leading-none">MUH BANK</span>
+                <span className="text-[8px] text-brand-accent font-medium uppercase tracking-widest">Digital</span>
               </div>
             </div>
           </div>
@@ -1253,79 +1407,148 @@ function App() {
           </div>
         </header>
 
-        {/* Chat Area */}
+        {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto custom-scrollbar">
-          <div className="max-w-3xl mx-auto w-full px-4 py-8">
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-                <motion.h2 
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="text-4xl font-semibold text-white mb-12 tracking-tight"
-                >
-                  {greeting}, {user.displayName?.split(' ')[0] || user.email?.split('@')[0] || 'Utilizador'}!
-                </motion.h2>
-                
-                <div className="w-full max-w-2xl">
-                  <ChatInput 
-                    input={input}
-                    setInput={setInput}
-                    handleSend={handleSend}
-                    isLoading={isLoading}
-                    placeholder="Comece uma nova conversa..."
-                    selectedFile={selectedFile}
-                    setSelectedFile={setSelectedFile}
-                  />
-                  
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
-                    {[
-                      { icon: "📝", label: "Resumir texto" },
-                      { icon: "💻", label: "Explicar código" },
-                      { icon: "🎨", label: "Ideias criativas" },
-                      { icon: "📊", label: "Analisar dados" }
-                    ].map((item) => (
-                      <button
-                        key={item.label}
-                        onClick={() => setInput(item.label)}
-                        className="flex flex-col items-center gap-2 p-4 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 hover:border-brand-accent/30 transition-all group"
-                      >
-                        <span className="text-xl group-hover:scale-110 transition-transform">{item.icon}</span>
-                        <span className="text-xs font-medium text-gray-500 group-hover:text-gray-300 transition-colors">{item.label}</span>
-                      </button>
-                    ))}
+          {currentView === 'about-bank' ? (
+            <div className="max-w-4xl mx-auto w-full px-6 py-12">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-12"
+              >
+                <div className="text-center space-y-4">
+                  <h1 className="text-5xl font-bold text-white tracking-tight">Bem-vindo ao <span className="text-brand-accent">MUH Bank</span></h1>
+                  <p className="text-xl text-gray-400 max-w-2xl mx-auto">O futuro das finanças digitais, potencializado por inteligência artificial avançada.</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {[
+                    { title: "Segurança Total", desc: "Criptografia de ponta a ponta e autenticação biométrica para proteger seu patrimônio.", icon: "🛡️" },
+                    { title: "IA Financeira", desc: "Nossa IA analisa seus gastos e sugere as melhores formas de investir e economizar.", icon: "🤖" },
+                    { title: "Taxa Zero", desc: "Aproveite transferências, pagamentos e manutenção de conta sem custos escondidos.", icon: "💎" }
+                  ].map((feature, i) => (
+                    <div key={i} className="p-6 bg-brand-surface border border-brand-border rounded-2xl hover:border-brand-accent/30 transition-all group">
+                      <div className="text-3xl mb-4 group-hover:scale-110 transition-transform">{feature.icon}</div>
+                      <h3 className="text-lg font-bold text-white mb-2">{feature.title}</h3>
+                      <p className="text-sm text-gray-400 leading-relaxed">{feature.desc}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-brand-accent/5 border border-brand-accent/20 rounded-3xl p-8 md:p-12">
+                  <div className="grid md:grid-cols-2 gap-12 items-center">
+                    <div className="space-y-6">
+                      <h2 className="text-3xl font-bold text-white">Nossa Missão</h2>
+                      <p className="text-gray-400 leading-relaxed">
+                        No MUH Bank, acreditamos que o acesso a serviços financeiros de qualidade deve ser simples, transparente e acessível a todos. 
+                        Combinamos tecnologia de ponta com um atendimento humanizado para criar a melhor experiência bancária do mundo.
+                      </p>
+                      <ul className="space-y-3">
+                        {["Transparência radical", "Inovação constante", "Foco no cliente"].map((item, i) => (
+                          <li key={i} className="flex items-center gap-3 text-sm text-gray-300">
+                            <Sparkles className="w-4 h-4 text-brand-accent" />
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="relative aspect-video bg-brand-dark rounded-2xl border border-brand-border overflow-hidden shadow-2xl">
+                      <img 
+                        src="https://picsum.photos/seed/bank/800/600" 
+                        alt="MUH Bank Office" 
+                        className="object-cover w-full h-full opacity-60"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <Bot className="w-16 h-16 text-brand-accent animate-pulse" />
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="space-y-12 pb-80">
-                <AnimatePresence initial={false}>
-                  {messages.map((message) => (
-                    <MessageItem key={message.id} message={message} />
-                  ))}
-                </AnimatePresence>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
+
+                <div className="text-center pb-12">
+                  <button 
+                    onClick={() => setCurrentView('chat')}
+                    className="px-8 py-4 bg-brand-accent text-white font-bold rounded-2xl hover:bg-brand-accent/80 transition-all shadow-lg shadow-brand-accent/20"
+                  >
+                    Falar com a Assistente MUH
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          ) : (
+            <div className="max-w-3xl mx-auto w-full px-4 py-8">
+              {messages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+                  <motion.h2 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-4xl font-semibold text-white mb-12 tracking-tight"
+                  >
+                    {greeting}, {nickname || user.displayName?.split(' ')[0] || user.email?.split('@')[0] || 'Utilizador'}!
+                  </motion.h2>
+                  
+                  <div className="w-full max-w-2xl">
+                    <ChatInput 
+                      input={input}
+                      setInput={setInput}
+                      handleSend={handleSend}
+                      isLoading={isLoading}
+                      placeholder="Como o MUH Bank pode ajudar hoje?"
+                      selectedFile={selectedFile}
+                      setSelectedFile={setSelectedFile}
+                    />
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
+                      {[
+                        { icon: "💰", label: "Saldo e Extrato" },
+                        { icon: "💳", label: "Meus Cartões" },
+                        { icon: "📈", label: "Investimentos" },
+                        { icon: "🛡️", label: "Seguros" }
+                      ].map((item) => (
+                        <button
+                          key={item.label}
+                          onClick={() => setInput(`Gostaria de saber sobre ${item.label.toLowerCase()}`)}
+                          className="flex flex-col items-center gap-2 p-4 bg-white/5 border border-brand-border rounded-xl hover:bg-white/10 hover:border-brand-accent/30 transition-all group"
+                        >
+                          <span className="text-xl group-hover:scale-110 transition-transform">{item.icon}</span>
+                          <span className="text-xs font-medium text-gray-500 group-hover:text-gray-300 transition-colors">{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-12 pb-80">
+                  <AnimatePresence initial={false}>
+                    {messages.map((message) => (
+                      <MessageItem key={message.id} message={message} />
+                    ))}
+                  </AnimatePresence>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
         </main>
 
         {/* Persistent Input Area (only when chatting) */}
         {messages.length > 0 && (
           <div className={`fixed bottom-0 left-0 right-0 ${isSidebarCollapsed ? 'lg:left-20' : 'lg:left-72'} bg-gradient-to-t from-brand-dark via-brand-dark to-transparent pt-12 pb-6 px-4 transition-all duration-300`}>
             <div className="max-w-3xl mx-auto">
-              <ChatInput 
-                input={input}
-                setInput={setInput}
-                handleSend={handleSend}
-                isLoading={isLoading}
-                placeholder="Responda à MUH ai..."
-                selectedFile={selectedFile}
-                setSelectedFile={setSelectedFile}
-                isSmall={true}
-              />
-              <p className="text-[10px] text-center text-gray-600 mt-3 font-medium">
-                MUH ai pode cometer erros. Considere verificar informações importantes.
-              </p>
+                <ChatInput 
+                  input={input}
+                  setInput={setInput}
+                  handleSend={handleSend}
+                  isLoading={isLoading}
+                  placeholder="Responda ao MUH Bank..."
+                  selectedFile={selectedFile}
+                  setSelectedFile={setSelectedFile}
+                  isSmall={true}
+                />
+                <p className="text-[10px] text-center text-gray-600 mt-3 font-medium">
+                  O MUH Bank ai pode cometer erros. Considere verificar informações importantes.
+                </p>
             </div>
           </div>
         )}

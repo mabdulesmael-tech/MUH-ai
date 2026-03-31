@@ -9,10 +9,12 @@ service cloud.firestore {
     // Document ID: userId (UID from Firebase Auth)
     // Fields:
     //   - uid: string (required, immutable) - Unique user ID
-    //   - displayName: string (optional) - User's display name
+    //   - displayName: string (optional) - User's display name from provider
+    //   - nickname: string (optional) - User's chosen nickname
     //   - email: string (required, immutable) - User's email
     //   - photoURL: string (optional) - URL to profile picture
     //   - createdAt: timestamp (required, immutable) - Creation time
+    //   - role: string (required) - User role (user/admin)
     //
     // Collection: /users/{userId}/sessions/{sessionId}
     // Document ID: sessionId
@@ -75,10 +77,11 @@ service cloud.firestore {
     // ===============================================================
 
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'role']) &&
+      return hasOnlyAllowedFields(['uid', 'displayName', 'nickname', 'email', 'photoURL', 'createdAt', 'role']) &&
              data.uid == request.auth.uid &&
              (data.get('email', null) == null || isValidEmail(data.email)) &&
              (data.get('displayName', null) == null || (data.displayName is string && data.displayName.size() <= 100)) &&
+             (data.get('nickname', null) == null || (data.nickname is string && data.nickname.size() >= 2 && data.nickname.size() <= 30)) &&
              (data.get('photoURL', null) == null || isValidUrl(data.photoURL)) &&
              data.createdAt is timestamp &&
              data.role in ['user', 'admin'];
