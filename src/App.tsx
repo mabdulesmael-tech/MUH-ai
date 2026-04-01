@@ -446,7 +446,7 @@ function App() {
 
   const scrollToBottom = useCallback(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current.scrollIntoView({ behavior: "auto" });
     }
   }, []);
 
@@ -619,6 +619,10 @@ function App() {
         ],
         config: {
           systemInstruction: `Você é a MUH ai, uma assistente virtual inteligente e inovadora. O nome do usuário é ${nickname || 'Utilizador'}. Trate-o de forma amigável, profissional e personalizada. Responda em português brasileiro de forma direta e completa, sem cortar o texto. Use markdown.`,
+          maxOutputTokens: 8192,
+          temperature: 0.7,
+          topP: 0.95,
+          topK: 40,
         }
       });
 
@@ -626,8 +630,13 @@ function App() {
       const assistantMessageId = (Date.now() + 1).toString();
 
       for await (const chunk of response) {
-        if (chunk.candidates?.[0]?.finishReason === 'SAFETY' || chunk.candidates?.[0]?.finishReason === 'OTHER') {
-          assistantContent += "\n\n⚠️ *[Resposta interrompida por filtros de segurança ou erro técnico]*";
+        const finishReason = chunk.candidates?.[0]?.finishReason;
+        if (finishReason === 'SAFETY' || finishReason === 'OTHER' || finishReason === 'MAX_TOKENS') {
+          if (finishReason === 'MAX_TOKENS') {
+            assistantContent += "\n\n⚠️ *[Resposta muito longa e foi limitada pelo sistema. Tente pedir para continuar.]*";
+          } else {
+            assistantContent += "\n\n⚠️ *[Resposta interrompida por filtros de segurança ou erro técnico]*";
+          }
           break;
         }
 
