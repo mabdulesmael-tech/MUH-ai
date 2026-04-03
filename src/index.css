@@ -12,7 +12,7 @@
 
 @layer base {
   body {
-    @apply bg-brand-dark text-gray-300 font-sans antialiased;
+    @apply bg-brand-dark text-gray-300 font-sans antialiased overflow-hidden;
   }
 }
 

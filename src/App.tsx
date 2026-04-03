@@ -399,6 +399,8 @@ ChatInput.displayName = 'ChatInput';
 
 type View = 'chat' | 'about-bank';
 
+const logoSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'><rect width='512' height='512' rx='128' fill='%230f0f0f'/><rect width='512' height='512' rx='128' fill='%233b82f6' fill-opacity='0.15'/><rect width='508' height='508' x='2' y='2' rx='126' fill='none' stroke='%233b82f6' stroke-opacity='0.3' stroke-width='4'/><g transform='translate(128, 128) scale(10.66)'><path d='M12 8V4H8' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><rect width='16' height='12' x='4' y='8' rx='2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M2 14h2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M20 14h2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M15 13v2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M9 13v2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></g></svg>`;
+
 function App() {
   const [nickname, setNickname] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<View>('chat');
@@ -759,9 +761,9 @@ function App() {
       {/* Sidebar */}
       <aside className={`fixed lg:static inset-y-0 left-0 bg-brand-surface border-r border-brand-border z-50 transform transition-all duration-300 ease-in-out will-change-transform ${
         isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-      } ${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-72'} w-72`}>
-        <div className="flex flex-col h-full p-4 relative">
-          <div className={`flex items-center mb-6 ${isSidebarCollapsed ? 'lg:justify-center' : 'justify-between'}`}>
+      } ${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-52'} w-52`}>
+        <div className="flex flex-col h-full p-3 relative">
+          <div className={`flex items-center mb-4 ${isSidebarCollapsed ? 'lg:justify-center' : 'justify-between'}`}>
             <button 
               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
               className="hidden lg:flex p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all"
@@ -783,17 +785,17 @@ function App() {
             )}
           </div>
 
-          <div className="space-y-2 mb-6">
+          <div className="space-y-1 mb-4">
             <button 
               onClick={() => {
                 setCurrentView('chat');
                 setIsSidebarOpen(false);
               }}
-              className={`flex items-center gap-3 w-full p-3 rounded-xl transition-all group ${
+              className={`flex items-center gap-3 w-full p-2.5 rounded-xl transition-all group ${
                 currentView === 'chat' ? 'bg-brand-accent/10 border border-brand-accent/20 text-white' : 'hover:bg-white/5 border border-transparent text-gray-400'
               } ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
             >
-              <MessageSquare className="w-5 h-5 flex-shrink-0" />
+              <MessageSquare className="w-4.5 h-4.5 flex-shrink-0" />
               {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Chat Assistant</span>}
             </button>
 
@@ -802,24 +804,24 @@ function App() {
                 setCurrentView('about-bank');
                 setIsSidebarOpen(false);
               }}
-              className={`flex items-center gap-3 w-full p-3 rounded-xl transition-all group ${
+              className={`flex items-center gap-3 w-full p-2.5 rounded-xl transition-all group ${
                 currentView === 'about-bank' ? 'bg-brand-accent/10 border border-brand-accent/20 text-white' : 'hover:bg-white/5 border border-transparent text-gray-400'
               } ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
             >
-              <Globe className="w-5 h-5 flex-shrink-0" />
+              <Globe className="w-4.5 h-4.5 flex-shrink-0" />
               {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Sobre a MUH ai</span>}
             </button>
           </div>
 
           <button 
             onClick={createNewSession}
-            className={`flex items-center gap-3 w-full p-3 rounded-xl border border-brand-border hover:bg-white/5 transition-all mb-6 group ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
+            className={`flex items-center gap-3 w-full p-2.5 rounded-xl border border-brand-border hover:bg-white/5 transition-all mb-4 group ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}
           >
-            <Plus className="w-5 h-5 text-brand-accent group-hover:scale-110 transition-transform flex-shrink-0" />
+            <Plus className="w-4.5 h-4.5 text-brand-accent group-hover:scale-110 transition-transform flex-shrink-0" />
             {!isSidebarCollapsed && <span className="text-sm font-medium whitespace-nowrap">Nova conversa</span>}
           </button>
 
-          <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar overflow-x-hidden">
+          <div className="flex-1 overflow-hidden space-y-1.5 overflow-x-hidden">
             <div className={`flex items-center justify-between px-2 mb-2 ${isSidebarCollapsed ? 'lg:justify-center' : ''}`}>
               <div className="flex items-center gap-2">
                 <History className="w-4 h-4 text-gray-500 flex-shrink-0" />
@@ -845,7 +847,7 @@ function App() {
                     setIsSidebarOpen(false);
                   }}
                   title={session.title}
-                  className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${
+                  className={`group flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-all ${
                     activeSessionId === session.id 
                       ? 'bg-brand-accent/10 border border-brand-accent/20 text-white' 
                       : 'hover:bg-white/5 border border-transparent text-gray-400 hover:text-gray-200'
@@ -1110,6 +1112,14 @@ function App() {
               <p className="text-[10px] text-center text-gray-600 mt-3 tracking-wider uppercase">
                 MUH ai pode cometer erros. Verifique informações importantes.
               </p>
+              <a 
+                href={`data:image/svg+xml;utf8,${encodeURIComponent(logoSvg)}`}
+                download="muh-ai-logo.svg"
+                className="block text-[8px] text-gray-800/10 hover:text-gray-600 transition-colors text-center mt-2"
+                title="Baixar Logo MUH ai"
+              >
+                Download Logo
+              </a>
             </div>
           </div>
         )}
