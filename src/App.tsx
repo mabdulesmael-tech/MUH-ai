@@ -399,7 +399,7 @@ ChatInput.displayName = 'ChatInput';
 
 type View = 'chat' | 'about-bank';
 
-const logoSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'><rect width='512' height='512' rx='128' fill='%230f0f0f'/><rect width='512' height='512' rx='128' fill='%233b82f6' fill-opacity='0.15'/><rect width='508' height='508' x='2' y='2' rx='126' fill='none' stroke='%233b82f6' stroke-opacity='0.3' stroke-width='4'/><g transform='translate(128, 128) scale(10.66)'><path d='M12 8V4H8' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><rect width='16' height='12' x='4' y='8' rx='2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M2 14h2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M20 14h2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M15 13v2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><path d='M9 13v2' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></g></svg>`;
+const logoSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'><defs><filter id='glow' x='-20%25' y='-20%25' width='140%25' height='140%25'><feGaussianBlur stdDeviation='10' result='blur' /><feComposite in='SourceGraphic' in2='blur' operator='over' /></filter></defs><rect width='512' height='512' rx='96' fill='%23050505'/><rect width='512' height='512' rx='96' fill='%233b82f6' fill-opacity='0.15'/><rect width='504' height='504' x='4' y='4' rx='92' fill='none' stroke='%233b82f6' stroke-opacity='0.4' stroke-width='8'/><g transform='translate(128, 128) scale(10.666)' filter='url(%23glow)'><path d='M12 8V4H8' fill='none' stroke='%233b82f6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/><rect width='16' height='12' x='4' y='8' rx='2' fill='none' stroke='%233b82f6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/><path d='M2 14h2' fill='none' stroke='%233b82f6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/><path d='M20 14h2' fill='none' stroke='%233b82f6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/><path d='M15 13v2' fill='none' stroke='%233b82f6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/><path d='M9 13v2' fill='none' stroke='%233b82f6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></g></svg>`;
 
 function App() {
   const [nickname, setNickname] = useState<string | null>(null);
@@ -1115,10 +1115,10 @@ function App() {
               <a 
                 href={`data:image/svg+xml;utf8,${encodeURIComponent(logoSvg)}`}
                 download="muh-ai-logo.svg"
-                className="block text-[8px] text-gray-800/10 hover:text-gray-600 transition-colors text-center mt-2"
-                title="Baixar Logo MUH ai"
+                className="block text-[8px] text-gray-800/20 hover:text-brand-accent/50 transition-colors text-center mt-2"
+                title="Baixar Logo MUH ai Oficial"
               >
-                Download Logo
+                Download Logo Oficial
               </a>
             </div>
           </div>
