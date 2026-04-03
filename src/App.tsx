@@ -452,6 +452,31 @@ function App() {
     }
   }, []);
 
+  const downloadLogoAsPng = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    const svgBlob = new Blob([logoSvg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0);
+      const pngUrl = canvas.toDataURL('image/png');
+      const downloadLink = document.createElement('a');
+      downloadLink.href = pngUrl;
+      downloadLink.download = 'muh-ai-logo.png';
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  };
+
   useEffect(() => {
     const lastMessage = messages[messages.length - 1];
     if (lastMessage?.role === 'assistant') {
@@ -1112,14 +1137,13 @@ function App() {
               <p className="text-[10px] text-center text-gray-600 mt-3 tracking-wider uppercase">
                 MUH ai pode cometer erros. Verifique informações importantes.
               </p>
-              <a 
-                href={`data:image/svg+xml;utf8,${encodeURIComponent(logoSvg)}`}
-                download="muh-ai-logo.svg"
-                className="block text-[8px] text-gray-800/20 hover:text-brand-accent/50 transition-colors text-center mt-2"
-                title="Baixar Logo MUH ai Oficial"
+              <button 
+                onClick={downloadLogoAsPng}
+                className="block w-full text-[8px] text-gray-800/20 hover:text-brand-accent/50 transition-colors text-center mt-2 cursor-pointer"
+                title="Baixar Logo MUH ai Oficial (PNG)"
               >
-                Download Logo Oficial
-              </a>
+                Download Logo Oficial (PNG)
+              </button>
             </div>
           </div>
         )}
